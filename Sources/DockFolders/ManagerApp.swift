@@ -8,9 +8,20 @@ final class ManagerAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Debug: DOCKFOLDERS_SNAPSHOT=<pad.png> legt het eigen venster vast (geen schermopname-rechten nodig).
         if let path = ProcessInfo.processInfo.environment["DOCKFOLDERS_SNAPSHOT"] {
+            // DOCKFOLDERS_SNAPSHOT_MIN=1: eerst naar de kleinst toegestane vensterbreedte.
+            if ProcessInfo.processInfo.environment["DOCKFOLDERS_SNAPSHOT_MIN"] != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    guard let window = NSApp.windows.first(where: \.isVisible) else { return }
+                    var frame = window.frame
+                    frame.size.width = window.minSize.width
+                    window.setFrame(frame, display: true)
+                }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 // Via de CALayer-boom: cacheDisplay slaat laag-inhoud (verlopen, glas) over.
-                guard let view = NSApp.windows.first(where: \.isVisible)?.contentView,
+                // Het kader rond de inhoud, zodat ook de vensterknoppen erop staan.
+                guard let content = NSApp.windows.first(where: \.isVisible)?.contentView,
+                      let view = content.superview ?? Optional(content),
                       let layer = view.layer,
                       let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * 2),
                                                  pixelsHigh: Int(view.bounds.height * 2), bitsPerSample: 8,
@@ -38,7 +49,6 @@ struct ManagerApp: App {
         Window("DockFolders", id: "main") {
             ContentView(selection: $selection)
                 .environmentObject(store)
-                .frame(minWidth: 1240, minHeight: 760)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
@@ -53,14 +63,32 @@ struct ManagerApp: App {
 
 // MARK: - Layout: mappen | voorbeeld | instellingen
 
+enum Layout {
+    /// Eén maat voor de rand van het venster én de ruimte tussen de kolommen.
+    static let gap: CGFloat = 8
+    static let sidebarWidth: CGFloat = 270
+    static let inspectorWidth: CGFloat = 340
+    static let paneRadius: CGFloat = 18
+    /// Binnenmarge van het voorbeeld rond het paneel.
+    static let stageInset: CGFloat = 32
+}
+
 struct ContentView: View {
     @EnvironmentObject private var store: FolderStore
     @Binding var selection: UUID?
 
+    /// Het midden moet minstens het paneel kunnen tonen (het Dock-icoon kan erboven); de
+    /// minimale vensterbreedte volgt daaruit, zodat de kolommen nooit buiten het venster vallen.
+    private var minWidth: CGFloat {
+        let panel = selection.flatMap(store.folder).map { PanelPreview.size(for: $0).width } ?? 0
+        let stage = max(420, panel + 2 * Layout.stageInset)
+        return Layout.sidebarWidth + stage + Layout.inspectorWidth + 4 * Layout.gap
+    }
+
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Layout.gap) {
             FoldersSidebar(selection: $selection)
-                .frame(width: 270)
+                .frame(width: Layout.sidebarWidth)
                 .paneBackground()
 
             Group {
@@ -72,7 +100,7 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background { Wallpaper() }
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Layout.paneRadius, style: .continuous))
 
             Group {
                 if let id = selection, store.folder(id) != nil {
@@ -82,11 +110,13 @@ struct ContentView: View {
                     Color.clear
                 }
             }
-            .frame(width: 340)
+            .frame(width: Layout.inspectorWidth)
             .paneBackground()
         }
-        .padding(12)
+        .padding(Layout.gap)
+        .frame(minWidth: minWidth, minHeight: 760)
         .background(Color(nsColor: .windowBackgroundColor))
+        .background(WindowConfigurator())
         .ignoresSafeArea()
         .onAppear {
             if selection == nil { selection = store.folders.first?.id }
@@ -112,7 +142,7 @@ struct ContentView: View {
 private extension View {
     func paneBackground() -> some View {
         background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: Layout.paneRadius, style: .continuous)
                 .fill(Color.primary.opacity(0.045))
         )
     }
@@ -178,7 +208,6 @@ struct FoldersSidebar: View {
                 }
             }
             .frame(height: 28)
-            .padding(.top, 10)
 
             if let id = selection, let folder = store.folder(id) {
                 SelectedFolderHeader(folder: folder)
@@ -214,7 +243,10 @@ struct FoldersSidebar: View {
             }
             .buttonStyle(.bordered)
         }
-        .padding(14)
+        // Boven minder ruimte: de rij met het tandwiel valt zo gelijk met de vensterknoppen.
+        .padding(.horizontal, 14)
+        .padding(.bottom, 14)
+        .padding(.top, WindowConfigurator.buttonRowTop)
     }
 }
 
@@ -288,17 +320,21 @@ struct PreviewStage: View {
     var body: some View {
         if let folder = store.folder(folderID) {
             ZStack {
-                HStack(spacing: 30) {
-                    // Zo ziet de map eruit in je Dock.
-                    Image(nsImage: IconCache.folderIcon(folder, points: 120))
-                        .resizable()
-                        .frame(width: 120, height: 120)
-                        .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
-                    let size = PanelPreview.size(for: folder)
-                    PanelPreview(folder: folder)
-                        .frame(width: size.width, height: size.height)
+                let size = PanelPreview.size(for: folder)
+                // Naast elkaar als het past, anders het Dock-icoon boven het paneel.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 30) {
+                        dockIcon(folder, size: 120)
+                        PanelPreview(folder: folder)
+                            .frame(width: size.width, height: size.height)
+                    }
+                    VStack(spacing: 24) {
+                        dockIcon(folder, size: 88)
+                        PanelPreview(folder: folder)
+                            .frame(width: size.width, height: size.height)
+                    }
                 }
-                .padding(40)
+                .padding(Layout.stageInset)
 
                 VStack {
                     HStack {
@@ -346,6 +382,40 @@ struct PreviewStage: View {
             .onChange(of: folderID) { inDock = store.isInDock(folderID) }
             .onChange(of: store.revision) { inDock = store.isInDock(folderID) }
         }
+    }
+}
+
+/// Zo ziet de map eruit in je Dock.
+private func dockIcon(_ folder: AppFolder, size: CGFloat) -> some View {
+    Image(nsImage: IconCache.folderIcon(folder, points: size))
+        .resizable()
+        .frame(width: size, height: size)
+        .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
+}
+
+/// Geeft het venster een (onzichtbare) toolbar. Daardoor wordt de titelbalk hoger en komen de
+/// vensterknoppen netjes binnen de zijbalk te staan, in plaats van op de bovenrand ervan.
+struct WindowConfigurator: NSViewRepresentable {
+    /// Bovenmarge binnen een kolom waarbij een rij van 28 pt gelijk valt met de vensterknoppen
+    /// (die bij een unified toolbar op ~26 pt van de bovenkant van het venster staan).
+    static let buttonRowTop: CGFloat = 26 - Layout.gap - 14
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { Self.configure(view.window) }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private static func configure(_ window: NSWindow?) {
+        guard let window, window.toolbar == nil else { return }
+        window.toolbar = NSToolbar(identifier: "DockFoldersMain")
+        window.toolbarStyle = .unified
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        window.styleMask.insert(.fullSizeContentView)
     }
 }
 
@@ -401,7 +471,8 @@ struct InspectorView: View {
                 Spacer()
             }
             .padding(.horizontal, 20)
-            .padding(.top, 22)
+            // Tabtitels op dezelfde hoogte als de vensterknoppen.
+            .padding(.top, WindowConfigurator.buttonRowTop + 4)
             Divider()
 
             switch tab {
@@ -484,6 +555,10 @@ private struct IconSettings: View {
                 .padding(16)
             }
             .onAppear { name = folder.name }
+            // Hernoemd vanuit het paneel in de Dock: naamveld bijwerken (tenzij je er net in typt).
+            .onChange(of: folder.name) { _, newName in
+                if !nameFocused { name = newName }
+            }
             .onChange(of: nameFocused) { _, focused in if !focused { commitName() } }
             .onDisappear { commitName() }
         }

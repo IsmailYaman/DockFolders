@@ -56,6 +56,7 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         let panel = FolderPanel(folder: folder, anchor: anchor,
                                 open: { [weak self] url in self?.launch(url) },
                                 edit: { [weak self] in self?.openManager() },
+                                rename: { [weak self] name in self?.rename(to: name) },
                                 close: { [weak self] in self?.hide() })
         self.panel = panel
         NSApp.activate(ignoringOtherApps: true)
@@ -72,6 +73,24 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
             if returnFocus { NSApp.hide(nil) }
             // Nieuwe apps uit de beheer-app alvast klaarzetten voor de volgende klik.
             self?.prewarmIcons()
+        }
+    }
+
+    /// Nieuwe naam opslaan en de bundle (en daarmee de naam in de Dock) bijwerken. De beheer-app
+    /// ziet de wijziging in folders.json en leest hem vanzelf opnieuw in.
+    private func rename(to name: String) {
+        var folders = FolderStorage.load()
+        guard let i = folders.firstIndex(where: { $0.id == folderID }) else { return }
+        folders[i].name = name
+        FolderStorage.save(folders)
+        let folder = folders[i]
+        // Bundle verplaatsen, opnieuw signeren en de Dock herstarten duurt even: niet op de main thread.
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try FolderBundleBuilder.build(folder)
+            } catch {
+                NSLog("DockFolders: hernoemen mislukt: \(error)")
+            }
         }
     }
 
@@ -99,7 +118,7 @@ final class FolderPanel: NSPanel {
     private var growPoint = CGPoint.zero
 
     init(folder: AppFolder, anchor: NSPoint, open: @escaping (URL) -> Void,
-         edit: @escaping () -> Void, close: @escaping () -> Void) {
+         edit: @escaping () -> Void, rename: ((String) -> Void)? = nil, close: @escaping () -> Void) {
         self.onClose = close
         super.init(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
 
@@ -114,7 +133,8 @@ final class FolderPanel: NSPanel {
         // NSPanel verbergt zich standaard direct bij wegklikken; wij laten de animatie dat doen.
         hidesOnDeactivate = false
 
-        let hosting = FirstClickHostingView(rootView: FolderPanelView(folder: folder, open: open, edit: edit))
+        let hosting = FirstClickHostingView(rootView: FolderPanelView(folder: folder, open: open, edit: edit,
+                                                                      rename: rename))
         let size = hosting.fittingSize
 
         card = PanelCardView(content: hosting, size: size)
@@ -273,13 +293,17 @@ struct FolderPanelView: View {
     let folder: AppFolder
     let open: (URL) -> Void
     let edit: () -> Void
+    /// nil = titel niet bewerkbaar (bv. in het voorbeeld van de beheer-app).
+    let rename: ((String) -> Void)?
     /// Eén keer opgebouwd (niet per body-evaluatie; SwiftUI rekent body meerdere keren uit).
     private let apps: [LaunchableApp]
 
-    init(folder: AppFolder, open: @escaping (URL) -> Void, edit: @escaping () -> Void) {
+    init(folder: AppFolder, open: @escaping (URL) -> Void, edit: @escaping () -> Void,
+         rename: ((String) -> Void)? = nil) {
         self.folder = folder
         self.open = open
         self.edit = edit
+        self.rename = rename
         self.apps = folder.apps
             .filter { FileManager.default.fileExists(atPath: $0) }
             .map { LaunchableApp(url: URL(fileURLWithPath: $0)) }
@@ -297,9 +321,7 @@ struct FolderPanelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(folder.name)
-                .font(.system(size: 26, weight: .regular))
-                .padding(.horizontal, 6)
+            EditableTitle(name: folder.name, onRename: rename)
 
             if apps.isEmpty {
                 VStack(spacing: 10) {
@@ -327,6 +349,54 @@ struct FolderPanelView: View {
         .contextMenu {
             Button("Edit Folder…", action: edit)
         }
+    }
+}
+
+/// Titel van het paneel; dubbelklik om te hernoemen. Enter of wegklikken bewaart, Esc annuleert.
+private struct EditableTitle: View {
+    let name: String
+    let onRename: ((String) -> Void)?
+
+    @State private var editing = false
+    @State private var draft = ""
+    /// Direct de nieuwe naam tonen, ook al wordt de bundle nog op de achtergrond bijgewerkt.
+    @State private var renamed: String?
+    @FocusState private var focused: Bool
+
+    private var current: String { renamed ?? name }
+
+    var body: some View {
+        Group {
+            if editing {
+                TextField("Folder name", text: $draft)
+                    .textFieldStyle(.plain)
+                    .focused($focused)
+                    .onSubmit(commit)
+                    .onExitCommand { editing = false }
+                    .onChange(of: focused) { _, isFocused in
+                        if !isFocused && editing { commit() }
+                    }
+                    .onAppear { focused = true }
+            } else {
+                Text(current)
+                    .onTapGesture(count: 2) {
+                        guard onRename != nil else { return }
+                        draft = current
+                        editing = true
+                    }
+                    .help(onRename != nil ? "Double-click to rename" : "")
+            }
+        }
+        .font(.system(size: 26, weight: .regular))
+        .padding(.horizontal, 6)
+    }
+
+    private func commit() {
+        editing = false
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != current else { return }
+        renamed = trimmed
+        onRename?(trimmed)
     }
 }
 

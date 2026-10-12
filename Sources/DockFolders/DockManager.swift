@@ -74,6 +74,10 @@ enum DockManager {
 
     /// De Dock cachet iconen; herstarten is de enige betrouwbare manier om een nieuw icoon te tonen.
     static func restart(after delay: TimeInterval = 0.4) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { restart(after: delay) }
+            return
+        }
         pendingRestart?.cancel()
         let work = DispatchWorkItem {
             let p = Process()

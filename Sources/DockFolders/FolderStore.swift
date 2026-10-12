@@ -19,6 +19,7 @@ final class FolderStore: ObservableObject {
             }
         }
         LoginItem.configure()
+        watchConfig()
         // Uitgestelde opslag niet kwijtraken bij afsluiten.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
                                                object: nil, queue: .main) { [weak self] _ in
@@ -107,6 +108,32 @@ final class FolderStore: ObservableObject {
     // MARK: Private
 
     private var pendingSave: DispatchWorkItem?
+    private var configWatcher: DispatchSourceFileSystemObject?
+
+    /// Map-apps kunnen folders.json zelf aanpassen (bv. hernoemen vanuit het paneel). Houd de map
+    /// in de gaten en lees wijzigingen van buitenaf in, anders overschrijft de volgende opslag ze.
+    /// (De map, niet het bestand: opslaan is atomisch en vervangt het bestand.)
+    private func watchConfig() {
+        try? FileManager.default.createDirectory(at: Paths.support, withIntermediateDirectories: true)
+        let fd = open(Paths.support.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.reloadFromDisk() }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        configWatcher = source
+    }
+
+    private func reloadFromDisk() {
+        // Eigen wijziging onderweg? Die is nieuwer en wordt zo opgeslagen.
+        guard pendingSave == nil else { return }
+        let disk = FolderStorage.load()
+        guard !disk.isEmpty, disk != folders else { return }
+        folders = disk
+        revision += 1
+    }
 
     private func flush() {
         guard let pending = pendingSave else { return }
@@ -120,6 +147,7 @@ final class FolderStore: ObservableObject {
         pendingSave?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            self.pendingSave = nil
             FolderStorage.save(self.folders)
         }
         pendingSave = work

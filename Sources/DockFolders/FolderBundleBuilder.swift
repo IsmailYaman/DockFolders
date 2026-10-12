@@ -53,8 +53,16 @@ enum FolderBundleBuilder {
             .map { $0.value.deletingPathExtension().lastPathComponent.lowercased() })
         let dest = Paths.bundles.appendingPathComponent(fileName(for: folder, avoiding: taken) + ".app")
 
+        // Vóór een eventuele verplaatsing vastleggen: hernoemt een map-app zichzelf, dan staat zijn
+        // eigen binary na de verplaatsing op een nieuwe plek.
+        guard var source = Bundle.main.executableURL?.standardizedFileURL else { throw CocoaError(.fileNoSuchFile) }
+
         // Hernoemd? Verplaats de bestaande bundle en werk de Dock bij.
         if let old = existing[folder.id], old.standardizedFileURL != dest.standardizedFileURL {
+            let oldPath = old.standardizedFileURL.path + "/"
+            if source.path.hasPrefix(oldPath) {
+                source = URL(fileURLWithPath: dest.standardizedFileURL.path + "/" + source.path.dropFirst(oldPath.count))
+            }
             if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
             try fm.moveItem(at: old, to: dest)
             DockManager.replace(old, with: dest)
@@ -66,11 +74,14 @@ enum FolderBundleBuilder {
         try fm.createDirectory(at: macOS, withIntermediateDirectories: true)
         try fm.createDirectory(at: resources, withIntermediateDirectories: true)
 
-        // Binary
-        guard let source = Bundle.main.executableURL else { throw CocoaError(.fileNoSuchFile) }
+        // Binary: eerst kopiëren naar een tijdelijk bestand en dat op de plek zetten. Zo krijgt de
+        // bundle een nieuw bestand, en blijft een draaiend proces (ook een map-app die zichzelf
+        // bijwerkt) zijn oude bestand houden; codesign past alleen het nieuwe aan.
         let exe = macOS.appendingPathComponent(executableName)
+        let temp = macOS.appendingPathComponent(".\(executableName).\(UUID().uuidString)")
+        try fm.copyItem(at: source, to: temp)
         if fm.fileExists(atPath: exe.path) { try fm.removeItem(at: exe) }
-        try fm.copyItem(at: source, to: exe)
+        try fm.moveItem(at: temp, to: exe)
 
         // Info.plist
         let info: [String: Any] = [
