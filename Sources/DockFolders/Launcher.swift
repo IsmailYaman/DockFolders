@@ -13,6 +13,7 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        prewarmIcons()
         // Bij inloggen start DockFolders ons op de achtergrond, zodat de eerste klik meteen werkt.
         if CommandLine.arguments.contains(FolderBundleBuilder.backgroundArgument) { return }
         // Op dit moment staat de muis nog op het Dock-icoon waarop geklikt is.
@@ -32,6 +33,12 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidResignActive(_ notification: Notification) {
         hide(returnFocus: false)
+    }
+
+    /// Iconen alvast op de achtergrond klaarzetten, zodat het paneel direct kan openen.
+    private func prewarmIcons() {
+        guard let folder = FolderStorage.load().first(where: { $0.id == folderID }) else { return }
+        IconCache.prewarm(folder.apps, points: LaunchableApp.iconPoints)
     }
 
     private func show(at anchor: NSPoint) {
@@ -59,9 +66,13 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         guard let panel else { return }
         self.panel = nil
         lastHidden = Date()
-        panel.dismiss { panel.orderOut(nil) }
-        // Focus teruggeven aan de app waar je vandaan kwam.
-        if returnFocus { NSApp.hide(nil) }
+        panel.dismiss { [weak self] in
+            panel.orderOut(nil)
+            // Focus pas na de animatie teruggeven; NSApp.hide verbergt het paneel anders meteen.
+            if returnFocus { NSApp.hide(nil) }
+            // Nieuwe apps uit de beheer-app alvast klaarzetten voor de volgende klik.
+            self?.prewarmIcons()
+        }
     }
 
     private func launch(_ url: URL) {
@@ -244,14 +255,17 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
 struct LaunchableApp: Identifiable {
     let url: URL
     var id: String { url.path }
-    var name: String { url.appDisplayName }
-    /// Zelf naar een bitmap tekenen: SwiftUI kiest anders soms de grijze "heldere" icoonvariant.
-    /// Ruim groter dan de 88 pt waarop hij getoond wordt, zodat hij bij de hover-vergroting scherp blijft.
+    let name: String
+    /// Eigen bitmap: SwiftUI kiest anders soms de grijze "heldere" icoonvariant. Iets groter dan
+    /// de 88 pt waarop hij getoond wordt, zodat hij bij de hover-vergroting scherp blijft.
     let icon: NSImage
+
+    static let iconPoints: CGFloat = 96
 
     init(url: URL) {
         self.url = url
-        self.icon = NSWorkspace.shared.icon(forFile: url.path).rasterized(points: 96, scale: 3)
+        self.name = url.appDisplayName
+        self.icon = IconCache.appIcon(url.path, points: Self.iconPoints)
     }
 }
 
@@ -259,9 +273,14 @@ struct FolderPanelView: View {
     let folder: AppFolder
     let open: (URL) -> Void
     let edit: () -> Void
+    /// Eén keer opgebouwd (niet per body-evaluatie; SwiftUI rekent body meerdere keren uit).
+    private let apps: [LaunchableApp]
 
-    private var apps: [LaunchableApp] {
-        folder.apps
+    init(folder: AppFolder, open: @escaping (URL) -> Void, edit: @escaping () -> Void) {
+        self.folder = folder
+        self.open = open
+        self.edit = edit
+        self.apps = folder.apps
             .filter { FileManager.default.fileExists(atPath: $0) }
             .map { LaunchableApp(url: URL(fileURLWithPath: $0)) }
     }

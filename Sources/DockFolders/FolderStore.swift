@@ -19,6 +19,11 @@ final class FolderStore: ObservableObject {
             }
         }
         LoginItem.configure()
+        // Uitgestelde opslag niet kwijtraken bij afsluiten.
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.flush() }
+        }
     }
 
     func folder(_ id: UUID) -> AppFolder? { folders.first { $0.id == id } }
@@ -94,8 +99,24 @@ final class FolderStore: ObservableObject {
 
     // MARK: Private
 
-    private func persist() {
+    private var pendingSave: DispatchWorkItem?
+
+    private func flush() {
+        guard let pending = pendingSave else { return }
+        pending.cancel()
+        pendingSave = nil
         FolderStorage.save(folders)
+    }
+
+    /// Kort uitgesteld: een schuifje slepen geeft tientallen wijzigingen per seconde.
+    private func persist() {
+        pendingSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            FolderStorage.save(self.folders)
+        }
+        pendingSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
 
     private func rebuild(_ id: UUID, delay: TimeInterval = 0.3) {

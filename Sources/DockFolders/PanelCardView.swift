@@ -64,14 +64,25 @@ struct PanelPreview: NSViewRepresentable {
         let hosting = NSHostingView(rootView: FolderPanelView(folder: folder, open: { _ in }, edit: {}))
         let card = PanelCardView(content: hosting, size: hosting.fittingSize)
         card.apply(folder)
+        context.coordinator.shown = folder
         return card
     }
 
+    final class Coordinator {
+        var shown: AppFolder?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func updateNSView(_ card: PanelCardView, context: Context) {
-        if let hosting = card.content as? NSHostingView<FolderPanelView> {
+        // Inhoud en grootte alleen opnieuw bij andere naam/apps; bij schuiven verandert alleen de stijl.
+        let previous = context.coordinator.shown
+        if previous?.name != folder.name || previous?.apps != folder.apps,
+           let hosting = card.content as? NSHostingView<FolderPanelView> {
             hosting.rootView = FolderPanelView(folder: folder, open: { _ in }, edit: {})
             card.setFrameSize(hosting.fittingSize)
         }
+        context.coordinator.shown = folder
         card.apply(folder)
     }
 

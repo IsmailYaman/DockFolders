@@ -39,7 +39,7 @@ struct ContentView: View {
                     Label {
                         Text(folder.name)
                     } icon: {
-                        Image(nsImage: IconRenderer.image(for: folder, size: 64))
+                        Image(nsImage: IconCache.folderIcon(folder, points: 22))
                             .resizable()
                             .frame(width: 22, height: 22)
                     }
@@ -143,10 +143,9 @@ struct FolderDetailView: View {
 
     private func header(_ folder: AppFolder) -> some View {
         HStack(alignment: .center, spacing: 20) {
-            Image(nsImage: IconRenderer.image(for: folder, size: 256))
+            Image(nsImage: IconCache.folderIcon(folder, points: 112))
                 .resizable()
                 .frame(width: 112, height: 112)
-                .id(store.revision)
 
             VStack(alignment: .leading, spacing: 12) {
                 TextField("Naam", text: $name)
@@ -259,7 +258,7 @@ struct AppRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: path).rasterized(points: 32))
+            Image(nsImage: IconCache.appIcon(path, points: 32))
                 .resizable()
                 .frame(width: 32, height: 32)
             VStack(alignment: .leading, spacing: 1) {

@@ -5,7 +5,10 @@ import UniformTypeIdentifiers
 /// Tekent een map-icoon: afgeronde tegel in de gekozen kleur met een 3x3 raster van app-iconen.
 enum IconRenderer {
     static func image(for folder: AppFolder, size: CGFloat = 1024) -> NSImage {
-        let icons = folder.apps.prefix(9).map { NSWorkspace.shared.icon(forFile: $0) }
+        // Uit de cache, op ongeveer het formaat van een rastervak: veel sneller dan steeds de
+        // 1024px-versie van elk app-icoon verkleinen.
+        let cell = max(16, (size * 0.8 / 3).rounded(.up))
+        let icons = folder.apps.prefix(9).map { IconCache.appIcon($0, points: cell) }
         let (top, bottom) = folder.tint.colors
 
         return NSImage(size: NSSize(width: size, height: size), flipped: true) { rect in
