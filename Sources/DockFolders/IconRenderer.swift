@@ -8,7 +8,9 @@ enum IconRenderer {
         // Uit de cache, op ongeveer het formaat van een rastervak: veel sneller dan steeds de
         // 1024px-versie van elk app-icoon verkleinen.
         let cell = max(16, (size * 0.8 / 3).rounded(.up))
-        let icons = folder.apps.prefix(9).map { IconCache.appIcon($0, points: cell) }
+        let custom = folder.icon.enabled ? folder.icon : nil
+        let icons = custom == nil ? folder.apps.prefix(9).map { IconCache.appIcon($0, points: cell) } : []
+        let customImage = custom?.kind == .image ? custom?.imagePath.flatMap { NSImage(contentsOfFile: $0) } : nil
         let (top, bottom) = folder.tint.colors
 
         return NSImage(size: NSSize(width: size, height: size), flipped: true) { rect in
@@ -40,6 +42,11 @@ enum IconRenderer {
             NSColor.white.withAlphaComponent(0.35).setStroke()
             rim.stroke()
 
+            if let custom {
+                drawCustom(custom, image: customImage, in: body, clip: path, canvas: s)
+                return true
+            }
+
             if icons.isEmpty {
                 let config = NSImage.SymbolConfiguration(pointSize: s * 0.3, weight: .semibold)
                 if let symbol = NSImage(systemSymbolName: "square.grid.3x3.fill", accessibilityDescription: nil)?
@@ -70,6 +77,48 @@ enum IconRenderer {
                           respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high.rawValue])
             }
             return true
+        }
+    }
+
+    /// Eigen icoon: emoji of SF Symbol midden op de tegel, of een afbeelding die de tegel vult.
+    private static func drawCustom(_ icon: CustomIcon, image: NSImage?, in body: NSRect,
+                                   clip: NSBezierPath, canvas s: CGFloat) {
+        switch icon.kind {
+        case .emoji:
+            let text = icon.emoji.isEmpty ? "📁" : icon.emoji
+            let font = NSFont.systemFont(ofSize: body.width * 0.55)
+            let string = NSAttributedString(string: text, attributes: [.font: font])
+            let size = string.size()
+            string.draw(at: NSPoint(x: body.midX - size.width / 2, y: body.midY - size.height / 2))
+
+        case .symbol:
+            let config = NSImage.SymbolConfiguration(pointSize: body.width * 0.42, weight: .semibold)
+            guard let symbol = (NSImage(systemSymbolName: icon.symbol, accessibilityDescription: nil)
+                ?? NSImage(systemSymbolName: "questionmark", accessibilityDescription: nil))?
+                .withSymbolConfiguration(config) else { return }
+            let tinted = NSImage(size: symbol.size, flipped: false) { r in
+                symbol.draw(in: r)
+                NSColor.white.withAlphaComponent(0.95).set()
+                r.fill(using: .sourceAtop)
+                return true
+            }
+            let size = tinted.size
+            tinted.draw(in: NSRect(x: body.midX - size.width / 2, y: body.midY - size.height / 2,
+                                   width: size.width, height: size.height),
+                        from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+
+        case .image:
+            guard let image, image.size.width > 0, image.size.height > 0 else { return }
+            // Vullend bijsnijden binnen de afgeronde tegel.
+            let scale = max(body.width / image.size.width, body.height / image.size.height)
+            let size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+            NSGraphicsContext.saveGraphicsState()
+            clip.addClip()
+            image.draw(in: NSRect(x: body.midX - size.width / 2, y: body.midY - size.height / 2,
+                                  width: size.width, height: size.height),
+                       from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true,
+                       hints: [.interpolation: NSImageInterpolation.high.rawValue])
+            NSGraphicsContext.restoreGraphicsState()
         }
     }
 

@@ -17,6 +17,22 @@ final class ManagerAppDelegate: NSObject, NSApplicationDelegate {
                     window.setFrame(frame, display: true)
                 }
             }
+            // DOCKFOLDERS_CLICK="x,y" (punten vanaf linksboven): klik via window.sendEvent, net als een echte muisklik.
+            if let click = ProcessInfo.processInfo.environment["DOCKFOLDERS_CLICK"] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    guard let window = NSApp.windows.first(where: \.isVisible) else { return }
+                    let xy = click.split(separator: ",").compactMap { Double($0) }
+                    let point = NSPoint(x: xy[0], y: window.frame.height - xy[1])
+                    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                        if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                                                          timestamp: ProcessInfo.processInfo.systemUptime,
+                                                          windowNumber: window.windowNumber, context: nil,
+                                                          eventNumber: 0, clickCount: 1, pressure: 1) {
+                            window.sendEvent(event)
+                        }
+                    }
+                }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 // Via de CALayer-boom: cacheDisplay slaat laag-inhoud (verlopen, glas) over.
                 // Het kader rond de inhoud, zodat ook de vensterknoppen erop staan.
@@ -81,7 +97,8 @@ struct ContentView: View {
     /// minimale vensterbreedte volgt daaruit, zodat de kolommen nooit buiten het venster vallen.
     private var minWidth: CGFloat {
         let panel = selection.flatMap(store.folder).map { PanelPreview.size(for: $0).width } ?? 0
-        let stage = max(420, panel + 2 * Layout.stageInset)
+        // Begrensd: een groter paneel wordt in het voorbeeld verkleind.
+        let stage = max(420, min(panel + 2 * Layout.stageInset, 640))
         return Layout.sidebarWidth + stage + Layout.inspectorWidth + 4 * Layout.gap
     }
 
@@ -312,7 +329,7 @@ private struct FolderTile: View {
 // MARK: - Midden: voorbeeld
 
 struct PreviewStage: View {
-    @EnvironmentObject private var store: FolderStore
+    @EnvironmentObject var store: FolderStore
     let folderID: UUID
     @State private var inDock = false
     @State private var dropTargeted = false
@@ -321,20 +338,36 @@ struct PreviewStage: View {
         if let folder = store.folder(folderID) {
             ZStack {
                 let size = PanelPreview.size(for: folder)
-                // Naast elkaar als het past, anders het Dock-icoon boven het paneel.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 30) {
-                        dockIcon(folder, size: 120)
-                        PanelPreview(folder: folder)
-                            .frame(width: size.width, height: size.height)
+                GeometryReader { geo in
+                    // Ruimte binnen de marges, minus de In Dock-schakelaar boven en de knop onder.
+                    let room = CGSize(width: geo.size.width - 2 * Layout.stageInset,
+                                      height: geo.size.height - 2 * Layout.stageInset - 120)
+                    // Naast elkaar als het past, anders het Dock-icoon boven het paneel.
+                    let beside = size.width + 150 <= room.width
+                    let panelRoom = beside ? CGSize(width: room.width - 150, height: room.height)
+                                           : CGSize(width: room.width, height: room.height - 112)
+                    // Groot raster? Dan het voorbeeld verkleinen in plaats van het venster op te rekken.
+                    let scale = max(0.3, min(1, panelRoom.width / size.width, panelRoom.height / size.height))
+                    let panel = PanelPreview(folder: folder, actions: previewActions)
+                        .frame(width: size.width, height: size.height)
+                        .scaleEffect(scale)
+                        .frame(width: size.width * scale, height: size.height * scale)
+
+                    Group {
+                        if beside {
+                            HStack(spacing: 30) {
+                                dockIcon(folder, size: 120)
+                                panel
+                            }
+                        } else {
+                            VStack(spacing: 24) {
+                                dockIcon(folder, size: 88)
+                                panel
+                            }
+                        }
                     }
-                    VStack(spacing: 24) {
-                        dockIcon(folder, size: 88)
-                        PanelPreview(folder: folder)
-                            .frame(width: size.width, height: size.height)
-                    }
+                    .frame(width: geo.size.width, height: geo.size.height)
                 }
-                .padding(Layout.stageInset)
 
                 VStack {
                     HStack {
@@ -385,6 +418,20 @@ struct PreviewStage: View {
     }
 }
 
+extension PreviewStage {
+    /// In het voorbeeld werken slepen en verwijderen ook; openen en hernoemen niet.
+    var previewActions: PanelActions {
+        var actions = PanelActions()
+        actions.reorder = { order in
+            store.update(folderID) { $0.apps = order + $0.apps.filter { !order.contains($0) } }
+        }
+        actions.remove = { path in
+            store.update(folderID) { $0.apps.removeAll { $0 == path } }
+        }
+        return actions
+    }
+}
+
 /// Zo ziet de map eruit in je Dock.
 private func dockIcon(_ folder: AppFolder, size: CGFloat) -> some View {
     Image(nsImage: IconCache.folderIcon(folder, points: size))
@@ -393,29 +440,63 @@ private func dockIcon(_ folder: AppFolder, size: CGFloat) -> some View {
         .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
 }
 
-/// Geeft het venster een (onzichtbare) toolbar. Daardoor wordt de titelbalk hoger en komen de
-/// vensterknoppen netjes binnen de zijbalk te staan, in plaats van op de bovenrand ervan.
+/// Zet de vensterknoppen netjes binnen de zijbalk, op dezelfde hoogte als het tandwiel en de
+/// tabbladen. Geen NSToolbar daarvoor gebruiken: die vangt alle klikken in de bovenste strook af
+/// (tabbladen, tandwiel, In Dock-schakelaar werkten dan niet).
 struct WindowConfigurator: NSViewRepresentable {
-    /// Bovenmarge binnen een kolom waarbij een rij van 28 pt gelijk valt met de vensterknoppen
-    /// (die bij een unified toolbar op ~26 pt van de bovenkant van het venster staan).
-    static let buttonRowTop: CGFloat = 26 - Layout.gap - 14
+    /// Hoogte van de titelbalkstrook; de knoppen staan verticaal in het midden (26 pt).
+    static let titlebarHeight: CGFloat = 52
+    /// Bovenmarge binnen een kolom waarbij een rij van 28 pt gelijk valt met de vensterknoppen.
+    static let buttonRowTop: CGFloat = titlebarHeight / 2 - Layout.gap - 14
+    /// Afstand van de sluitknop tot de linkerrand van het venster (binnen de zijbalk).
+    static let buttonLeading: CGFloat = Layout.gap + 14
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        DispatchQueue.main.async { Self.configure(view.window) }
+        DispatchQueue.main.async { Self.configure(view.window, coordinator: context.coordinator) }
         return view
     }
 
     func updateNSView(_ view: NSView, context: Context) {}
 
-    private static func configure(_ window: NSWindow?) {
-        guard let window, window.toolbar == nil else { return }
-        window.toolbar = NSToolbar(identifier: "DockFoldersMain")
-        window.toolbarStyle = .unified
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var observers: [NSObjectProtocol] = []
+        deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+    }
+
+    private static func configure(_ window: NSWindow?, coordinator: Coordinator) {
+        guard let window, coordinator.observers.isEmpty else { return }
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.titlebarSeparatorStyle = .none
         window.styleMask.insert(.fullSizeContentView)
+        layoutButtons(in: window)
+        // AppKit zet de knoppen terug bij o.a. vergroten en volledig scherm.
+        let names: [Notification.Name] = [NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification,
+                                          NSWindow.didExitFullScreenNotification, NSWindow.didBecomeKeyNotification,
+                                          NSWindow.didResignKeyNotification]
+        coordinator.observers = names.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak window] _ in
+                if let window { layoutButtons(in: window) }
+            }
+        }
+    }
+
+    static func layoutButtons(in window: NSWindow) {
+        guard !window.styleMask.contains(.fullScreen),
+              let close = window.standardWindowButton(.closeButton),
+              let titlebar = close.superview, let container = titlebar.superview else { return }
+        let height = titlebarHeight
+        container.frame = NSRect(x: 0, y: window.frame.height - height, width: window.frame.width, height: height)
+        titlebar.frame = container.bounds
+        let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        for (index, type) in buttons.enumerated() {
+            guard let button = window.standardWindowButton(type) else { continue }
+            button.setFrameOrigin(NSPoint(x: buttonLeading + CGFloat(index) * 20,
+                                          y: (height - button.frame.height) / 2))
+        }
     }
 }
 
@@ -444,6 +525,7 @@ struct InspectorView: View {
     enum Tab: String, CaseIterable {
         case icon = "Icon"
         case popup = "Popup"
+        case grid = "Grid"
         case apps = "Apps"
     }
 
@@ -478,6 +560,7 @@ struct InspectorView: View {
             switch tab {
             case .icon: IconSettings(folderID: folderID, onDelete: onDelete)
             case .popup: PopupSettings(folderID: folderID)
+            case .grid: GridSettings(folderID: folderID)
             case .apps: AppsSettings(folderID: folderID)
             }
         }
@@ -532,6 +615,8 @@ private struct IconSettings: View {
                     }
                     .card()
 
+                    CustomIconCard(folderID: folderID)
+
                     VStack(alignment: .leading, spacing: 10) {
                         SectionLabel("Folder")
                         Button {
@@ -571,6 +656,234 @@ private struct IconSettings: View {
             return
         }
         store.update(folderID) { $0.name = trimmed }
+    }
+}
+
+/// Optioneel eigen map-icoon (standaard uit): emoji, SF Symbol of afbeelding.
+private struct CustomIconCard: View {
+    @EnvironmentObject private var store: FolderStore
+    let folderID: UUID
+    @FocusState private var emojiFocused: Bool
+
+    private var icon: CustomIcon { store.folder(folderID)?.icon ?? CustomIcon() }
+
+    private func binding<T>(_ keyPath: WritableKeyPath<CustomIcon, T>) -> Binding<T> {
+        Binding(
+            get: { icon[keyPath: keyPath] },
+            set: { value in store.update(folderID) { $0.icon[keyPath: keyPath] = value } }
+        )
+    }
+
+    private static let symbols = [
+        "star.fill", "heart.fill", "bolt.fill", "flame.fill", "leaf.fill", "moon.fill",
+        "briefcase.fill", "hammer.fill", "paintbrush.fill", "camera.fill", "music.note", "gamecontroller.fill",
+        "terminal.fill", "globe", "book.fill", "cart.fill", "message.fill", "folder.fill",
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Custom icon")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("Use an emoji, symbol or image instead of the app grid.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Toggle("", isOn: binding(\.enabled))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+
+            if icon.enabled {
+                Picker("", selection: binding(\.kind)) {
+                    ForEach(CustomIconKind.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                switch icon.kind {
+                case .emoji:
+                    HStack {
+                        TextField("Emoji", text: Binding(
+                            get: { icon.emoji },
+                            // Eén teken (een emoji kan uit meerdere scalars bestaan).
+                            set: { value in store.update(folderID) { $0.icon.emoji = String(value.suffix(1)) } }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 20))
+                        .frame(width: 60)
+                        .focused($emojiFocused)
+                        Button("Emoji Picker…") {
+                            emojiFocused = true
+                            DispatchQueue.main.async { NSApp.orderFrontCharacterPalette(nil) }
+                        }
+                    }
+
+                case .symbol:
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 6), spacing: 6) {
+                        ForEach(Self.symbols, id: \.self) { name in
+                            Image(systemName: name)
+                                .font(.system(size: 16))
+                                .frame(maxWidth: .infinity, minHeight: 34)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(icon.symbol == name ? Color.accentColor.opacity(0.25)
+                                                                  : Color.primary.opacity(0.05))
+                                )
+                                .contentShape(Rectangle())
+                                .onTapGesture { store.update(folderID) { $0.icon.symbol = name } }
+                                .help(name)
+                        }
+                    }
+                    TextField("SF Symbol name", text: binding(\.symbol))
+                        .textFieldStyle(.roundedBorder)
+
+                case .image:
+                    HStack {
+                        Button("Choose Image…", action: chooseImage)
+                        if let path = icon.imagePath {
+                            Text(URL(fileURLWithPath: path).lastPathComponent)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+            }
+        }
+        .card()
+    }
+
+    /// Kopie in Application Support, zodat het icoon blijft werken als het origineel verdwijnt.
+    private func chooseImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+        let dir = Paths.support.appendingPathComponent("Icons", isDirectory: true)
+        let dest = dir.appendingPathComponent("\(folderID.uuidString)-\(UUID().uuidString).\(source.pathExtension)")
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: source, to: dest)
+            let old = icon.imagePath
+            store.update(folderID) { $0.icon.imagePath = dest.path }
+            if let old { try? FileManager.default.removeItem(atPath: old) }
+        } catch {
+            NSLog("DockFolders: afbeelding kopiëren mislukt: \(error)")
+        }
+    }
+}
+
+/// Raster, pagina's en draaiende apps.
+private struct GridSettings: View {
+    @EnvironmentObject private var store: FolderStore
+    let folderID: UUID
+
+    private var grid: GridStyle { store.folder(folderID)?.grid ?? GridStyle() }
+
+    private func binding<T>(_ keyPath: WritableKeyPath<GridStyle, T>) -> Binding<T> {
+        Binding(
+            get: { grid[keyPath: keyPath] },
+            set: { value in store.update(folderID) { $0.grid[keyPath: keyPath] = value } }
+        )
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
+                    ToggleRow(title: "Auto layout",
+                              detail: grid.autoLayout ? "Columns adapt to the number of apps."
+                                                      : "Pick the column count below — rows flow as needed.",
+                              isOn: binding(\.autoLayout))
+                    if !grid.autoLayout {
+                        Picker("", selection: binding(\.columns)) {
+                            ForEach(Array(GridStyle.columnRange), id: \.self) { Text("\($0)").tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+                }
+                .card()
+
+                VStack(alignment: .leading, spacing: 14) {
+                    SectionLabel("Apps grid")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Icon size").font(.system(size: 13))
+                        Picker("", selection: binding(\.iconSize)) {
+                            ForEach(IconSize.allCases) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Density").font(.system(size: 13))
+                        Picker("", selection: binding(\.density)) {
+                            ForEach(GridDensity.allCases) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+                    Divider()
+                    ToggleRow(title: "Show running apps",
+                              detail: "A dot under apps that are open.",
+                              isOn: binding(\.showRunning))
+                }
+                .card()
+
+                VStack(alignment: .leading, spacing: 14) {
+                    SectionLabel("Pages")
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Rows per page").font(.system(size: 13))
+                            Text("More apps continue on the next page.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Stepper("\(grid.rowsPerPage)", value: binding(\.rowsPerPage), in: GridStyle.rowRange)
+                            .monospacedDigit()
+                    }
+                    Divider()
+                    ToggleRow(title: "Hide pagination",
+                              detail: "Swipe, scroll or use the arrow keys to change pages.",
+                              isOn: binding(\.hidePagination))
+                }
+                .card()
+
+                Button("Reset to Default") {
+                    store.update(folderID) { $0.grid = GridStyle() }
+                }
+                .disabled(grid == GridStyle())
+                .frame(maxWidth: .infinity)
+            }
+            .padding(16)
+        }
+    }
+}
+
+private struct ToggleRow: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.system(size: 15, weight: .semibold))
+                Text(detail)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Toggle("", isOn: $isOn)
+                .toggleStyle(.switch)
+                .labelsHidden()
+        }
     }
 }
 

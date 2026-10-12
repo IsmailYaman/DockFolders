@@ -20,7 +20,9 @@ enum IconCache {
 
     /// Map-icoon (raster van app-iconen in de mapkleur).
     static func folderIcon(_ folder: AppFolder, points: CGFloat) -> NSImage {
-        let key = "folder|\(points)|\(folder.tint.rawValue)|\(folder.apps.prefix(9).joined(separator: ":"))"
+        let icon = folder.icon
+        let custom = icon.enabled ? "\(icon.kind)|\(icon.emoji)|\(icon.symbol)|\(icon.imagePath ?? "")" : "-"
+        let key = "folder|\(points)|\(folder.tint.rawValue)|\(custom)|\(folder.apps.prefix(9).joined(separator: ":"))"
         return cached(key) {
             IconRenderer.image(for: folder, size: points).rasterized(points: points)
         }

@@ -46,6 +46,7 @@ final class FolderStore: ObservableObject {
 
     func delete(_ id: UUID) {
         pendingBuilds[id]?.cancel()
+        if let image = folder(id)?.icon.imagePath { try? FileManager.default.removeItem(atPath: image) }
         folders.removeAll { $0.id == id }
         persist()
         FolderBundleBuilder.remove(id: id)

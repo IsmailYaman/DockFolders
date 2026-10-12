@@ -65,13 +65,18 @@ struct AppFolder: Identifiable, Codable, Hashable {
     var apps: [String] = []
     var tint: FolderTint = .blue
     var panel = PanelStyle()
+    var grid = GridStyle()
+    var icon = CustomIcon()
 
-    init(id: UUID = UUID(), name: String, apps: [String] = [], tint: FolderTint = .blue, panel: PanelStyle = PanelStyle()) {
+    init(id: UUID = UUID(), name: String, apps: [String] = [], tint: FolderTint = .blue,
+         panel: PanelStyle = PanelStyle(), grid: GridStyle = GridStyle(), icon: CustomIcon = CustomIcon()) {
         self.id = id
         self.name = name
         self.apps = apps
         self.tint = tint
         self.panel = panel
+        self.grid = grid
+        self.icon = icon
     }
 
     // Ontbrekende velden (oudere folders.json) krijgen hun standaardwaarde.
@@ -82,11 +87,109 @@ struct AppFolder: Identifiable, Codable, Hashable {
         apps = try c.decodeIfPresent([String].self, forKey: .apps) ?? []
         tint = try c.decodeIfPresent(FolderTint.self, forKey: .tint) ?? .blue
         panel = try c.decodeIfPresent(PanelStyle.self, forKey: .panel) ?? PanelStyle()
+        grid = try c.decodeIfPresent(GridStyle.self, forKey: .grid) ?? GridStyle()
+        icon = try c.decodeIfPresent(CustomIcon.self, forKey: .icon) ?? CustomIcon()
     }
 
     /// Velden die het Dock-icoon of de bundle bepalen; alleen dan hoeft de bundle opnieuw gebouwd.
     func affectsBundle(comparedTo other: AppFolder) -> Bool {
-        name != other.name || apps != other.apps || tint != other.tint
+        name != other.name || tint != other.tint || icon != other.icon
+            || (!icon.enabled && apps.prefix(9) != other.apps.prefix(9))
+    }
+}
+
+// MARK: - Raster en pagina's
+
+enum IconSize: String, Codable, CaseIterable, Identifiable {
+    case small, medium, large
+    var id: String { rawValue }
+    var label: String { switch self { case .small: "S"; case .medium: "M"; case .large: "L" } }
+    var points: CGFloat { switch self { case .small: 64; case .medium: 88; case .large: 112 } }
+    var labelSize: CGFloat { switch self { case .small: 12; case .medium: 14; case .large: 15 } }
+}
+
+enum GridDensity: String, Codable, CaseIterable, Identifiable {
+    case tight, normal, airy
+    var id: String { rawValue }
+    var label: String { switch self { case .tight: "Tight"; case .normal: "Normal"; case .airy: "Airy" } }
+    var spacing: (horizontal: CGFloat, vertical: CGFloat) {
+        switch self {
+        case .tight: (2, 4)
+        case .normal: (8, 10)
+        case .airy: (18, 20)
+        }
+    }
+}
+
+struct GridStyle: Codable, Hashable {
+    /// Automatisch aantal kolommen op basis van het aantal apps.
+    var autoLayout = true
+    /// Vast aantal kolommen als autoLayout uit staat.
+    var columns = 4
+    var iconSize = IconSize.medium
+    var density = GridDensity.normal
+    /// Maximaal aantal rijen per pagina; meer apps gaan naar een volgende pagina.
+    var rowsPerPage = 4
+    var hidePagination = false
+    /// Puntje onder apps die draaien.
+    var showRunning = true
+
+    static let columnRange = 2...7
+    static let rowRange = 1...6
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = GridStyle()
+        autoLayout = try c.decodeIfPresent(Bool.self, forKey: .autoLayout) ?? d.autoLayout
+        columns = try c.decodeIfPresent(Int.self, forKey: .columns) ?? d.columns
+        iconSize = try c.decodeIfPresent(IconSize.self, forKey: .iconSize) ?? d.iconSize
+        density = try c.decodeIfPresent(GridDensity.self, forKey: .density) ?? d.density
+        rowsPerPage = try c.decodeIfPresent(Int.self, forKey: .rowsPerPage) ?? d.rowsPerPage
+        hidePagination = try c.decodeIfPresent(Bool.self, forKey: .hidePagination) ?? d.hidePagination
+        showRunning = try c.decodeIfPresent(Bool.self, forKey: .showRunning) ?? d.showRunning
+    }
+
+    func columns(for count: Int) -> Int {
+        guard autoLayout else { return columns }
+        switch count {
+        case 0...3: return max(count, 1)
+        case 4: return 4
+        case 5...9: return 3
+        case 10...16: return 4
+        default: return 5
+        }
+    }
+}
+
+// MARK: - Eigen map-icoon
+
+enum CustomIconKind: String, Codable, CaseIterable, Identifiable {
+    case emoji, symbol, image
+    var id: String { rawValue }
+    var label: String { switch self { case .emoji: "Emoji"; case .symbol: "Symbol"; case .image: "Image" } }
+}
+
+/// Optioneel eigen icoon in plaats van het raster met app-iconen. Standaard uit.
+struct CustomIcon: Codable, Hashable {
+    var enabled = false
+    var kind = CustomIconKind.emoji
+    var emoji = "📁"
+    var symbol = "star.fill"
+    /// Kopie van de gekozen afbeelding in Application Support.
+    var imagePath: String?
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = CustomIcon()
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
+        kind = try c.decodeIfPresent(CustomIconKind.self, forKey: .kind) ?? d.kind
+        emoji = try c.decodeIfPresent(String.self, forKey: .emoji) ?? d.emoji
+        symbol = try c.decodeIfPresent(String.self, forKey: .symbol) ?? d.symbol
+        imagePath = try c.decodeIfPresent(String.self, forKey: .imagePath)
     }
 }
 

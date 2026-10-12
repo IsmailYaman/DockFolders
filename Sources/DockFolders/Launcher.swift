@@ -7,6 +7,8 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
     let folderID: UUID
     private var panel: FolderPanel?
     private var lastHidden = Date.distantPast
+    /// Apps of volgorde gewijzigd vanuit het paneel: na sluiten de bundle (Dock-icoon) bijwerken.
+    private var needsRebuild = false
 
     init(folderID: UUID) {
         self.folderID = folderID
@@ -31,6 +33,22 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    /// Apps op het map-icoon in de Dock gesleept: toevoegen en het paneel tonen.
+    /// (Wordt bij een koude start vóór applicationDidFinishLaunching aangeroepen.)
+    func application(_ application: NSApplication, open urls: [URL]) {
+        let paths = urls.filter { $0.pathExtension == "app" }.map { $0.resolvingSymlinksInPath().path }
+        guard !paths.isEmpty else { return }
+        updateFolder { folder in
+            for path in paths where !folder.apps.contains(path) { folder.apps.append(path) }
+        }
+        rebuildBundle()
+        if panel != nil {
+            panel?.orderOut(nil)
+            panel = nil
+        }
+        if NSApp.isRunning { show(at: NSEvent.mouseLocation) }
+    }
+
     func applicationDidResignActive(_ notification: Notification) {
         hide(returnFocus: false)
     }
@@ -38,7 +56,7 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
     /// Iconen alvast op de achtergrond klaarzetten, zodat het paneel direct kan openen.
     private func prewarmIcons() {
         guard let folder = FolderStorage.load().first(where: { $0.id == folderID }) else { return }
-        IconCache.prewarm(folder.apps, points: LaunchableApp.iconPoints)
+        IconCache.prewarm(folder.apps, points: folder.grid.iconSize.rasterPoints)
     }
 
     private func show(at anchor: NSPoint) {
@@ -53,14 +71,32 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let panel = FolderPanel(folder: folder, anchor: anchor,
-                                open: { [weak self] url in self?.launch(url) },
-                                edit: { [weak self] in self?.openManager() },
-                                rename: { [weak self] name in self?.rename(to: name) },
+        let actions = makeActions()
+        let panel = FolderPanel(folder: folder, anchor: anchor, actions: actions,
                                 close: { [weak self] in self?.hide() })
         self.panel = panel
         NSApp.activate(ignoringOtherApps: true)
         panel.present()
+    }
+
+    /// Wat het paneel in de Dock doet bij openen, hernoemen, slepen en verwijderen.
+    func makeActions() -> PanelActions {
+        var actions = PanelActions()
+        actions.open = { [weak self] url in self?.launch(url) }
+        actions.edit = { [weak self] in self?.openManager() }
+        actions.rename = { [weak self] name in self?.rename(to: name) }
+        actions.reorder = { [weak self] order in
+            self?.updateFolder { folder in
+                // Apps die (tijdelijk) niet gevonden worden niet kwijtraken: achteraan houden.
+                folder.apps = order + folder.apps.filter { !order.contains($0) }
+            }
+            self?.needsRebuild = true
+        }
+        actions.remove = { [weak self] path in
+            self?.updateFolder { $0.apps.removeAll { $0 == path } }
+            self?.needsRebuild = true
+        }
+        return actions
     }
 
     private func hide(returnFocus: Bool = true) {
@@ -73,25 +109,41 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
             if returnFocus { NSApp.hide(nil) }
             // Nieuwe apps uit de beheer-app alvast klaarzetten voor de volgende klik.
             self?.prewarmIcons()
+            // Pas nu het Dock-icoon bijwerken: dat herstart de Dock, wat niet moet gebeuren
+            // terwijl je nog in het paneel aan het slepen bent.
+            if self?.needsRebuild == true {
+                self?.needsRebuild = false
+                self?.rebuildBundle()
+            }
         }
     }
 
-    /// Nieuwe naam opslaan en de bundle (en daarmee de naam in de Dock) bijwerken. De beheer-app
-    /// ziet de wijziging in folders.json en leest hem vanzelf opnieuw in.
-    private func rename(to name: String) {
+    /// Lees-wijzig-schrijf op folders.json voor deze map. De beheer-app leest de wijziging vanzelf in.
+    private func updateFolder(_ change: (inout AppFolder) -> Void) {
         var folders = FolderStorage.load()
         guard let i = folders.firstIndex(where: { $0.id == folderID }) else { return }
-        folders[i].name = name
+        change(&folders[i])
         FolderStorage.save(folders)
-        let folder = folders[i]
-        // Bundle verplaatsen, opnieuw signeren en de Dock herstarten duurt even: niet op de main thread.
+    }
+
+    /// Bundle opnieuw bouwen (icoon, naam) en de Dock herstarten als het icoon erin staat.
+    /// Verplaatsen, signeren en herstarten duurt even: niet op de main thread.
+    private func rebuildBundle() {
+        guard let folder = FolderStorage.load().first(where: { $0.id == folderID }) else { return }
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                try FolderBundleBuilder.build(folder)
+                let url = try FolderBundleBuilder.build(folder)
+                if DockManager.contains(url) { DockManager.restart(after: 0.3) }
             } catch {
-                NSLog("DockFolders: hernoemen mislukt: \(error)")
+                NSLog("DockFolders: bijwerken mislukt: \(error)")
             }
         }
+    }
+
+    /// Nieuwe naam opslaan en de bundle (en daarmee de naam in de Dock) bijwerken.
+    private func rename(to name: String) {
+        updateFolder { $0.name = name }
+        rebuildBundle()
     }
 
     private func launch(_ url: URL) {
@@ -117,8 +169,7 @@ final class FolderPanel: NSPanel {
     /// Het Dock-icoon, in de coördinaten van het paneel: hier groeit het paneel uit.
     private var growPoint = CGPoint.zero
 
-    init(folder: AppFolder, anchor: NSPoint, open: @escaping (URL) -> Void,
-         edit: @escaping () -> Void, rename: ((String) -> Void)? = nil, close: @escaping () -> Void) {
+    init(folder: AppFolder, anchor: NSPoint, actions: PanelActions, close: @escaping () -> Void) {
         self.onClose = close
         super.init(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
 
@@ -133,8 +184,7 @@ final class FolderPanel: NSPanel {
         // NSPanel verbergt zich standaard direct bij wegklikken; wij laten de animatie dat doen.
         hidesOnDeactivate = false
 
-        let hosting = FirstClickHostingView(rootView: FolderPanelView(folder: folder, open: open, edit: edit,
-                                                                      rename: rename))
+        let hosting = FirstClickHostingView(rootView: FolderPanelView(folder: folder, actions: actions))
         let size = hosting.fittingSize
 
         card = PanelCardView(content: hosting, size: size)
@@ -267,171 +317,32 @@ final class FolderPanel: NSPanel {
     }
 }
 
-/// Laat de eerste klik direct naar de knop gaan, ook als de app nog niet actief was.
+/// Laat de eerste klik direct naar de knop gaan, ook als de app nog niet actief was, en vertaalt
+/// scrollen/vegen naar bladeren tussen pagina's.
 final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+    private var scrollAccumulator: CGFloat = 0
+    private var swipedThisGesture = false
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-}
 
-struct LaunchableApp: Identifiable {
-    let url: URL
-    var id: String { url.path }
-    let name: String
-    /// Eigen bitmap: SwiftUI kiest anders soms de grijze "heldere" icoonvariant. Iets groter dan
-    /// de 88 pt waarop hij getoond wordt, zodat hij bij de hover-vergroting scherp blijft.
-    let icon: NSImage
-
-    static let iconPoints: CGFloat = 96
-
-    init(url: URL) {
-        self.url = url
-        self.name = url.appDisplayName
-        self.icon = IconCache.appIcon(url.path, points: Self.iconPoints)
-    }
-}
-
-struct FolderPanelView: View {
-    let folder: AppFolder
-    let open: (URL) -> Void
-    let edit: () -> Void
-    /// nil = titel niet bewerkbaar (bv. in het voorbeeld van de beheer-app).
-    let rename: ((String) -> Void)?
-    /// Eén keer opgebouwd (niet per body-evaluatie; SwiftUI rekent body meerdere keren uit).
-    private let apps: [LaunchableApp]
-
-    init(folder: AppFolder, open: @escaping (URL) -> Void, edit: @escaping () -> Void,
-         rename: ((String) -> Void)? = nil) {
-        self.folder = folder
-        self.open = open
-        self.edit = edit
-        self.rename = rename
-        self.apps = folder.apps
-            .filter { FileManager.default.fileExists(atPath: $0) }
-            .map { LaunchableApp(url: URL(fileURLWithPath: $0)) }
-    }
-
-    private var columns: Int {
-        switch apps.count {
-        case 0...3: max(apps.count, 1)
-        case 4: 4
-        case 5...9: 3
-        case 10...16: 4
-        default: 5
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            EditableTitle(name: folder.name, onRename: rename)
-
-            if apps.isEmpty {
-                VStack(spacing: 10) {
-                    Text("No apps in this folder yet")
-                        .foregroundStyle(.secondary)
-                    Button("Add Apps…", action: edit)
-                }
-                .frame(width: 280, height: 110)
-            } else {
-                Grid(horizontalSpacing: 8, verticalSpacing: 10) {
-                    ForEach(Array(stride(from: 0, to: apps.count, by: columns)), id: \.self) { start in
-                        GridRow {
-                            ForEach(apps[start..<min(start + columns, apps.count)]) { app in
-                                AppTile(app: app) { open(app.url) }
-                            }
-                        }
-                    }
-                }
+    override func scrollWheel(with event: NSEvent) {
+        // Trackpad: één bladzijde per veeggebaar. Muiswiel: één bladzijde per tik.
+        if event.phase == .began || event.phase == [] && event.momentumPhase == [] {
+            if event.phase == .began {
+                scrollAccumulator = 0
+                swipedThisGesture = false
             }
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 22)
-        .padding(.bottom, 18)
-        .contentShape(Rectangle())
-        .contextMenu {
-            Button("Edit Folder…", action: edit)
+        let delta = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) ? -event.scrollingDeltaX : -event.scrollingDeltaY
+        if event.phase == [] && event.momentumPhase == [] {
+            if delta != 0 { PagingSignal.post(delta > 0 ? 1 : -1) }
+            return
         }
-    }
-}
-
-/// Titel van het paneel; dubbelklik om te hernoemen. Enter of wegklikken bewaart, Esc annuleert.
-private struct EditableTitle: View {
-    let name: String
-    let onRename: ((String) -> Void)?
-
-    @State private var editing = false
-    @State private var draft = ""
-    /// Direct de nieuwe naam tonen, ook al wordt de bundle nog op de achtergrond bijgewerkt.
-    @State private var renamed: String?
-    @FocusState private var focused: Bool
-
-    private var current: String { renamed ?? name }
-
-    var body: some View {
-        Group {
-            if editing {
-                TextField("Folder name", text: $draft)
-                    .textFieldStyle(.plain)
-                    .focused($focused)
-                    .onSubmit(commit)
-                    .onExitCommand { editing = false }
-                    .onChange(of: focused) { _, isFocused in
-                        if !isFocused && editing { commit() }
-                    }
-                    .onAppear { focused = true }
-            } else {
-                Text(current)
-                    .onTapGesture(count: 2) {
-                        guard onRename != nil else { return }
-                        draft = current
-                        editing = true
-                    }
-                    .help(onRename != nil ? "Double-click to rename" : "")
-            }
+        guard !swipedThisGesture, event.momentumPhase == [] else { return }
+        scrollAccumulator += delta
+        if abs(scrollAccumulator) > 30 {
+            swipedThisGesture = true
+            PagingSignal.post(scrollAccumulator > 0 ? 1 : -1)
         }
-        .font(.system(size: 26, weight: .regular))
-        .padding(.horizontal, 6)
-    }
-
-    private func commit() {
-        editing = false
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != current else { return }
-        renamed = trimmed
-        onRename?(trimmed)
-    }
-}
-
-struct AppTile: View {
-    static let width: CGFloat = 112
-
-    let app: LaunchableApp
-    let action: () -> Void
-    @State private var hovering = false
-    @State private var pressed = false
-
-    var body: some View {
-        // Geen Button: macOS dimt knopinhoud in een venster dat nog niet actief is.
-        VStack(spacing: 8) {
-            Image(nsImage: app.icon)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 88, height: 88)
-                .scaleEffect(hovering ? 1.06 : 1)
-                .brightness(pressed ? -0.15 : 0)
-            Text(app.name)
-                .font(.system(size: 14, weight: .medium))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: Self.width)
-        }
-        .frame(width: Self.width)
-        .contentShape(Rectangle())
-        .onHover { h in withAnimation(.easeOut(duration: 0.12)) { hovering = h } }
-        .onTapGesture(perform: action)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in pressed = true }
-                .onEnded { _ in pressed = false }
-        )
-        .help(app.name)
     }
 }

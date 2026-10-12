@@ -23,7 +23,7 @@ if let idString = Bundle.main.object(forInfoDictionaryKey: Paths.folderIDKey) as
     // Debug: render het paneel van de eerste map naar een PNG en print de berekende grootte.
     MainActor.assumeIsolated {
         guard let folder = FolderStorage.load().first else { exit(1) }
-        let view = FolderPanelView(folder: folder, open: { _ in }, edit: {})
+        let view = FolderPanelView(folder: folder)
         let hosting = NSHostingView(rootView: view)
         print("fittingSize:", hosting.fittingSize)
         let renderer = ImageRenderer(content: view)

@@ -62,15 +62,16 @@ final class PanelCardView: NSView {
 /// Live voorbeeld van het paneel voor in de beheer-app.
 struct PanelPreview: NSViewRepresentable {
     let folder: AppFolder
+    var actions = PanelActions()
 
     /// Natuurlijke grootte van het paneel; gebruik met `.frame`, want een AppKit-view in SwiftUI
     /// wordt anders opgerekt tot alle beschikbare ruimte.
     static func size(for folder: AppFolder) -> CGSize {
-        NSHostingView(rootView: FolderPanelView(folder: folder, open: { _ in }, edit: {})).fittingSize
+        NSHostingView(rootView: FolderPanelView(folder: folder)).fittingSize
     }
 
     func makeNSView(context: Context) -> PanelCardView {
-        let hosting = NSHostingView(rootView: FolderPanelView(folder: folder, open: { _ in }, edit: {}))
+        let hosting = NSHostingView(rootView: FolderPanelView(folder: folder, actions: actions))
         let card = PanelCardView(content: hosting, size: hosting.fittingSize)
         card.apply(folder)
         context.coordinator.shown = folder
@@ -84,11 +85,12 @@ struct PanelPreview: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func updateNSView(_ card: PanelCardView, context: Context) {
-        // Inhoud en grootte alleen opnieuw bij andere naam/apps; bij schuiven verandert alleen de stijl.
+        // Inhoud en grootte alleen opnieuw als die echt verandert; bij de glas-schuifjes
+        // verandert alleen de achtergrond.
         let previous = context.coordinator.shown
-        if previous?.name != folder.name || previous?.apps != folder.apps,
+        if previous?.name != folder.name || previous?.apps != folder.apps || previous?.grid != folder.grid,
            let hosting = card.content as? NSHostingView<FolderPanelView> {
-            hosting.rootView = FolderPanelView(folder: folder, open: { _ in }, edit: {})
+            hosting.rootView = FolderPanelView(folder: folder, actions: actions)
             card.preferredSize = hosting.fittingSize
         }
         context.coordinator.shown = folder

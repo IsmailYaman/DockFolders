@@ -95,6 +95,13 @@ enum FolderBundleBuilder {
             "CFBundleIconFile": "FolderIcon",
             "LSMinimumSystemVersion": "26.0",
             "NSHighResolutionCapable": true,
+            // Apps op het map-icoon in de Dock slepen voegt ze toe aan de map.
+            "CFBundleDocumentTypes": [[
+                "CFBundleTypeName": "Application",
+                "CFBundleTypeRole": "Viewer",
+                "LSHandlerRank": "None",
+                "LSItemContentTypes": ["com.apple.application-bundle"],
+            ]],
             Paths.folderIDKey: folder.id.uuidString,
         ]
         let plistData = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
