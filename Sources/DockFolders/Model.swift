@@ -133,6 +133,10 @@ struct GridStyle: Codable, Hashable {
     var hidePagination = false
     /// Puntje onder apps die draaien.
     var showRunning = true
+    /// Iconen vergroten rond de cursor, zoals in de Dock. Standaard uit.
+    var magnification = false
+    /// Hoe sterk (0 = klein, 1 = groot), net als het schuifje in Systeeminstellingen.
+    var magnificationAmount = 0.5
 
     static let columnRange = 2...7
     static let rowRange = 1...6
@@ -149,6 +153,19 @@ struct GridStyle: Codable, Hashable {
         rowsPerPage = try c.decodeIfPresent(Int.self, forKey: .rowsPerPage) ?? d.rowsPerPage
         hidePagination = try c.decodeIfPresent(Bool.self, forKey: .hidePagination) ?? d.hidePagination
         showRunning = try c.decodeIfPresent(Bool.self, forKey: .showRunning) ?? d.showRunning
+        magnification = try c.decodeIfPresent(Bool.self, forKey: .magnification) ?? d.magnification
+        magnificationAmount = try c.decodeIfPresent(Double.self, forKey: .magnificationAmount) ?? d.magnificationAmount
+    }
+
+    /// Schaal van het icoon direct onder de cursor (1,15× tot 1,8×).
+    var maxMagnification: CGFloat { 1.15 + 0.65 * CGFloat(magnificationAmount) }
+
+    /// Schaal van een icoon op `distance` punten van de cursor: vloeiend aflopend (cosinus)
+    /// tot 1 op 1,6 icoonbreedte afstand, zoals de Dock.
+    func magnification(atDistance distance: CGFloat) -> CGFloat {
+        let radius = iconSize.points * 1.6
+        let t = min(distance / radius, 1)
+        return 1 + (maxMagnification - 1) * (cos(.pi * t) + 1) / 2
     }
 
     func columns(for count: Int) -> Int {

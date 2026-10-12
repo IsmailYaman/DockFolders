@@ -835,6 +835,26 @@ private struct GridSettings: View {
                 .card()
 
                 VStack(alignment: .leading, spacing: 14) {
+                    ToggleRow(title: "Magnification",
+                              detail: "Icons grow as the pointer moves over them, like the Dock.",
+                              isOn: binding(\.magnification))
+                    if grid.magnification {
+                        VStack(spacing: 4) {
+                            Slider(value: binding(\.magnificationAmount), in: 0...1)
+                                .controlSize(.small)
+                            HStack {
+                                Text("Small")
+                                Spacer()
+                                Text("Large")
+                            }
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .card()
+
+                VStack(alignment: .leading, spacing: 14) {
                     SectionLabel("Pages")
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {

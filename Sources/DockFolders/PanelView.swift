@@ -22,9 +22,19 @@ enum PagingSignal {
     }
 }
 
-extension IconSize {
-    /// Iets groter dan getoond, zodat het icoon bij de hover-vergroting scherp blijft.
-    var rasterPoints: CGFloat { (points * 1.1).rounded() }
+extension GridStyle {
+    /// Groot genoeg voor de grootste schaal (hover of vergroting), zodat iconen scherp blijven.
+    var iconRasterPoints: CGFloat {
+        (iconSize.points * (magnification ? maxMagnification : 1.1)).rounded()
+    }
+}
+
+/// Middelpunten van de iconen in de vergrotingsruimte, per app-pad.
+private struct IconCentersKey: PreferenceKey {
+    static let defaultValue: [String: CGPoint] = [:]
+    static func reduce(value: inout [String: CGPoint], nextValue: () -> [String: CGPoint]) {
+        value.merge(nextValue()) { $1 }
+    }
 }
 
 struct LaunchableApp: Identifiable {
@@ -35,10 +45,10 @@ struct LaunchableApp: Identifiable {
     let icon: NSImage
     let running: Bool
 
-    init(url: URL, iconSize: IconSize, running: Bool) {
+    init(url: URL, rasterPoints: CGFloat, running: Bool) {
         self.url = url
         self.name = url.appDisplayName
-        self.icon = IconCache.appIcon(url.path, points: iconSize.rasterPoints)
+        self.icon = IconCache.appIcon(url.path, points: rasterPoints)
         self.running = running
     }
 }
@@ -51,6 +61,9 @@ struct FolderPanelView: View {
     @State private var order: [String]
     @State private var page = 0
     @State private var dropTarget: String?
+    /// Cursorpositie en icoonmiddelpunten voor de Dock-achtige vergroting.
+    @State private var cursor: CGPoint?
+    @State private var iconCenters: [String: CGPoint] = [:]
     /// Eén keer opgebouwd (niet per body-evaluatie; SwiftUI rekent body meerdere keren uit).
     private let appsByPath: [String: LaunchableApp]
 
@@ -64,7 +77,7 @@ struct FolderPanelView: View {
         var byPath: [String: LaunchableApp] = [:]
         for path in existing {
             let url = URL(fileURLWithPath: path)
-            byPath[path] = LaunchableApp(url: url, iconSize: folder.grid.iconSize,
+            byPath[path] = LaunchableApp(url: url, rasterPoints: folder.grid.iconRasterPoints,
                                          running: running.contains(url.resolvingSymlinksInPath().path))
         }
         self.appsByPath = byPath
@@ -109,6 +122,18 @@ struct FolderPanelView: View {
                     }
                 }
                 .animation(.easeOut(duration: 0.15), value: current)
+                .coordinateSpace(.named(Self.magnifySpace))
+                .onPreferenceChange(IconCentersKey.self) { iconCenters = $0 }
+                .onContinuousHover(coordinateSpace: .named(Self.magnifySpace)) { phase in
+                    guard grid.magnification else { return }
+                    switch phase {
+                    case .active(let location):
+                        cursor = location
+                    case .ended:
+                        // Terugveren naar normaal, zoals de Dock na het wegbewegen.
+                        withAnimation(.spring(duration: 0.25)) { cursor = nil }
+                    }
+                }
 
                 if pages.count > 1 && !grid.hidePagination {
                     PageDots(count: pages.count, current: current) { page = $0 }
@@ -134,6 +159,15 @@ struct FolderPanelView: View {
         .onChange(of: folder.apps) { _, _ in order = Self.existingApps(folder) }
     }
 
+    private static let magnifySpace = "magnify"
+
+    /// Schaal van een icoon op basis van de afstand tot de cursor; nil = vergroting uit.
+    private func magnification(for app: LaunchableApp) -> CGFloat? {
+        guard grid.magnification else { return nil }
+        guard let cursor, let center = iconCenters[app.id] else { return 1 }
+        return grid.magnification(atDistance: hypot(cursor.x - center.x, cursor.y - center.y))
+    }
+
     private func turn(_ direction: Int) {
         let count = pages.count
         guard count > 1 else { return }
@@ -155,9 +189,12 @@ struct FolderPanelView: View {
 
     @ViewBuilder
     private func tile(_ app: LaunchableApp) -> some View {
+        let scale = magnification(for: app)
         let tile = AppTile(app: app, size: grid.iconSize, showRunning: grid.showRunning,
-                           dropTargeted: dropTarget == app.id) { actions.open(app.url) }
+                           dropTargeted: dropTarget == app.id, magnification: scale) { actions.open(app.url) }
             .contextMenu { appMenu(app) }
+            // Grotere iconen boven hun buren.
+            .zIndex(Double(scale ?? 1))
 
         if actions.reorder != nil {
             tile
@@ -289,10 +326,13 @@ struct AppTile: View {
     let size: IconSize
     let showRunning: Bool
     let dropTargeted: Bool
+    /// Schaal door de Dock-achtige vergroting; nil = gewoon hover-effect.
+    var magnification: CGFloat?
     let action: () -> Void
     @State private var hovering = false
 
     private var width: CGFloat { size.points + 24 }
+    private var scale: CGFloat { magnification ?? (hovering ? 1.06 : 1) }
 
     var body: some View {
         // Geen Button: macOS dimt knopinhoud in een venster dat nog niet actief is.
@@ -301,7 +341,12 @@ struct AppTile: View {
                 .resizable()
                 .interpolation(.high)
                 .frame(width: size.points, height: size.points)
-                .scaleEffect(hovering ? 1.06 : 1)
+                .background(GeometryReader { geo in
+                    let frame = geo.frame(in: .named("magnify"))
+                    Color.clear.preference(key: IconCentersKey.self,
+                                           value: [app.id: CGPoint(x: frame.midX, y: frame.midY)])
+                })
+                .scaleEffect(scale, anchor: .center)
             Text(app.name)
                 .font(.system(size: size.labelSize, weight: .medium))
                 .lineLimit(1)

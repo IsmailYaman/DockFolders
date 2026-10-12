@@ -56,7 +56,7 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
     /// Iconen alvast op de achtergrond klaarzetten, zodat het paneel direct kan openen.
     private func prewarmIcons() {
         guard let folder = FolderStorage.load().first(where: { $0.id == folderID }) else { return }
-        IconCache.prewarm(folder.apps, points: folder.grid.iconSize.rasterPoints)
+        IconCache.prewarm(folder.apps, points: folder.grid.iconRasterPoints)
     }
 
     private func show(at anchor: NSPoint) {
