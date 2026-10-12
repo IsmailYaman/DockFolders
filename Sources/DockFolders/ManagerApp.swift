@@ -95,14 +95,30 @@ struct FolderDetailView: View {
     @State private var name = ""
     @State private var inDock = false
     @State private var dropTargeted = false
+    @State private var tab = DetailTab.apps
     @FocusState private var nameFocused: Bool
+
+    enum DetailTab: String, CaseIterable {
+        case apps = "Apps"
+        case appearance = "Uiterlijk"
+    }
 
     var body: some View {
         if let folder = store.folder(folderID) {
             VStack(spacing: 0) {
                 header(folder)
+                Picker("", selection: $tab) {
+                    ForEach(DetailTab.allCases, id: \.self) { Text($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .padding(.bottom, 12)
                 Divider()
-                appList(folder)
+                switch tab {
+                case .apps: appList(folder)
+                case .appearance: AppearanceView(folderID: folderID)
+                }
             }
             .toolbar {
                 ToolbarItem {
@@ -267,6 +283,110 @@ struct AppRow: View {
         .contextMenu {
             Button("Uit map verwijderen", action: remove)
             Button("Toon in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        }
+    }
+}
+
+/// Instellingen voor de achtergrond van het paneel, met live voorbeeld.
+struct AppearanceView: View {
+    @EnvironmentObject private var store: FolderStore
+    let folderID: UUID
+
+    private var style: PanelStyle { store.folder(folderID)?.panel ?? PanelStyle() }
+
+    private func binding<T>(_ keyPath: WritableKeyPath<PanelStyle, T>) -> Binding<T> {
+        Binding(
+            get: { style[keyPath: keyPath] },
+            set: { value in store.update(folderID) { $0.panel[keyPath: keyPath] = value } }
+        )
+    }
+
+    private var customColor: Binding<Color> {
+        Binding(
+            get: { Color(nsColor: style.customColor.nsColor) },
+            set: { store.update(folderID) { [c = RGBAColor(NSColor($0))] f in f.panel.customColor = c } }
+        )
+    }
+
+    var body: some View {
+        if let folder = store.folder(folderID) {
+            ScrollView {
+                VStack(spacing: 0) {
+                    preview(folder)
+                    Form {
+                        Section("Achtergrond") {
+                            Picker("Stijl", selection: binding(\.background)) {
+                                ForEach(PanelBackground.allCases) { Text($0.name).tag($0) }
+                            }
+                            if style.background == .custom {
+                                ColorPicker("Kleur", selection: customColor, supportsOpacity: false)
+                            }
+                        }
+                        Section {
+                            Toggle("Glas", isOn: binding(\.glass))
+                            if style.glass {
+                                LabeledContent("Sterkte") {
+                                    Slider(value: binding(\.strength), in: 0...1)
+                                }
+                                LabeledContent("Doorzichtigheid") {
+                                    Slider(value: binding(\.transparency), in: 0...1)
+                                }
+                            }
+                        } footer: {
+                            Text(style.glass
+                                 ? "Sterkte bepaalt hoeveel kleur er in het glas zit, doorzichtigheid hoeveel je erdoorheen ziet."
+                                 : "Zonder glas krijgt het paneel een effen achtergrond.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Section {
+                            Button("Standaard herstellen") {
+                                store.update(folderID) { $0.panel = PanelStyle() }
+                            }
+                            .disabled(style == PanelStyle())
+                        }
+                    }
+                    .formStyle(.grouped)
+                    .scrollDisabled(true)
+                    .frame(maxWidth: 520)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    /// Het echte paneel op je bureaubladachtergrond, zodat je het glas goed ziet.
+    private func preview(_ folder: AppFolder) -> some View {
+        PanelPreview(folder: folder)
+            .padding(28)
+            .frame(maxWidth: .infinity)
+            .background {
+                Wallpaper()
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .padding([.horizontal, .top], 20)
+    }
+}
+
+/// De huidige bureaubladachtergrond (of een kleurverloop als die niet te lezen is).
+struct Wallpaper: View {
+    private static let image: NSImage? = {
+        guard let screen = NSScreen.main,
+              let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
+        return NSImage(contentsOf: url)
+    }()
+
+    var body: some View {
+        if let image = Self.image {
+            // Via overlay: de afbeelding vult het vlak maar bepaalt de grootte niet.
+            Color.clear.overlay {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            }
+            .clipped()
+        } else {
+            LinearGradient(colors: [.indigo, .purple, .orange], startPoint: .topLeading, endPoint: .bottomTrailing)
         }
     }
 }

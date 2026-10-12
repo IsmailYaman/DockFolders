@@ -82,14 +82,14 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
 
 final class FolderPanel: NSPanel {
     private let onClose: () -> Void
-    private let glass: NSGlassEffectView
+    /// De afgeronde kaart (achtergrond + inhoud); deze laag wordt geanimeerd.
+    private var card: PanelCardView!
     /// Het Dock-icoon, in de coördinaten van het paneel: hier groeit het paneel uit.
     private var growPoint = CGPoint.zero
 
     init(folder: AppFolder, anchor: NSPoint, open: @escaping (URL) -> Void,
          edit: @escaping () -> Void, close: @escaping () -> Void) {
         self.onClose = close
-        self.glass = NSGlassEffectView()
         super.init(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
 
         isOpaque = false
@@ -106,26 +106,18 @@ final class FolderPanel: NSPanel {
         let hosting = FirstClickHostingView(rootView: FolderPanelView(folder: folder, open: open, edit: edit))
         let size = hosting.fittingSize
 
-        // Liquid Glass met de inhoud er bovenop, getint in de mapkleur.
-        glass.frame = NSRect(origin: .zero, size: size)
-        glass.wantsLayer = true
-        glass.cornerRadius = 34
-        if folder.tint != .frost {
-            glass.tintColor = folder.tint.colors.0.withAlphaComponent(0.35)
-        }
-        hosting.frame = glass.bounds
-        hosting.autoresizingMask = [.width, .height]
-        glass.contentView = hosting
+        card = PanelCardView(content: hosting, size: size)
+        card.apply(folder)
 
-        // Gewone (niet-geflipte) container, zodat de laag van het glas vrij getransformeerd kan worden.
+        // Gewone (niet-geflipte) container, zodat de laag van de kaart vrij getransformeerd kan worden.
         // De doorzichtige marge geeft de veeranimatie ruimte, anders wordt de overshoot afgekapt.
         let margin = Self.animationMargin
         let glassFrame = Self.frame(for: size, anchor: anchor)
         let frame = glassFrame.insetBy(dx: -margin, dy: -margin)
         let container = NSView(frame: NSRect(origin: .zero, size: frame.size))
         container.wantsLayer = true
-        glass.frame.origin = CGPoint(x: margin, y: margin)
-        container.addSubview(glass)
+        card.frame.origin = CGPoint(x: margin, y: margin)
+        container.addSubview(card)
         contentView = container
 
         setFrame(frame, display: true)
@@ -140,7 +132,7 @@ final class FolderPanel: NSPanel {
     override func cancelOperation(_ sender: Any?) { onClose() }
 
     func present() {
-        guard let layer = glass.layer else {
+        guard let layer = card.layer else {
             makeKeyAndOrderFront(nil)
             return
         }
@@ -173,7 +165,7 @@ final class FolderPanel: NSPanel {
     }
 
     func dismiss(completion: @escaping () -> Void) {
-        guard let layer = glass.layer else {
+        guard let layer = card.layer else {
             completion()
             return
         }
@@ -201,7 +193,7 @@ final class FolderPanel: NSPanel {
 
     /// Schaal rond het Dock-icoon (in plaats van rond het ankerpunt van de laag).
     private func transform(scale: CGFloat) -> CATransform3D {
-        guard let layer = glass.layer else { return CATransform3DIdentity }
+        guard let layer = card.layer else { return CATransform3DIdentity }
         let pivot = CGPoint(x: growPoint.x - layer.anchorPoint.x * layer.bounds.width,
                             y: growPoint.y - layer.anchorPoint.y * layer.bounds.height)
         var t = CATransform3DMakeTranslation(pivot.x, pivot.y, 0)

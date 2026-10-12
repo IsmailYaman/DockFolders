@@ -64,6 +64,148 @@ struct AppFolder: Identifiable, Codable, Hashable {
     /// Absolute paden naar .app-bundles.
     var apps: [String] = []
     var tint: FolderTint = .blue
+    var panel = PanelStyle()
+
+    init(id: UUID = UUID(), name: String, apps: [String] = [], tint: FolderTint = .blue, panel: PanelStyle = PanelStyle()) {
+        self.id = id
+        self.name = name
+        self.apps = apps
+        self.tint = tint
+        self.panel = panel
+    }
+
+    // Ontbrekende velden (oudere folders.json) krijgen hun standaardwaarde.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        apps = try c.decodeIfPresent([String].self, forKey: .apps) ?? []
+        tint = try c.decodeIfPresent(FolderTint.self, forKey: .tint) ?? .blue
+        panel = try c.decodeIfPresent(PanelStyle.self, forKey: .panel) ?? PanelStyle()
+    }
+
+    /// Velden die het Dock-icoon of de bundle bepalen; alleen dan hoeft de bundle opnieuw gebouwd.
+    func affectsBundle(comparedTo other: AppFolder) -> Bool {
+        name != other.name || apps != other.apps || tint != other.tint
+    }
+}
+
+// MARK: - Uiterlijk van het paneel
+
+enum PanelBackground: String, Codable, CaseIterable, Identifiable {
+    case folderColor, clear, smoked, custom
+
+    var id: String { rawValue }
+
+    var name: String {
+        switch self {
+        case .folderColor: "Mapkleur"
+        case .clear: "Transparant glas"
+        case .smoked: "Smoked glas"
+        case .custom: "Eigen kleur"
+        }
+    }
+}
+
+struct RGBAColor: Codable, Hashable {
+    var red: Double
+    var green: Double
+    var blue: Double
+
+    init(red: Double, green: Double, blue: Double) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+    }
+
+    init(_ color: NSColor) {
+        let c = color.usingColorSpace(.sRGB) ?? .systemBlue
+        self.init(red: c.redComponent, green: c.greenComponent, blue: c.blueComponent)
+    }
+
+    var nsColor: NSColor { NSColor(srgbRed: red, green: green, blue: blue, alpha: 1) }
+
+    static let defaultCustom = RGBAColor(red: 0.35, green: 0.30, blue: 0.85)
+}
+
+enum PanelAppearance { case light, dark, system }
+
+struct PanelStyle: Codable, Hashable {
+    var background: PanelBackground = .folderColor
+    var customColor: RGBAColor = .defaultCustom
+    var glass = true
+    /// Hoe sterk de kleur in het glas doorkomt (0...1).
+    var strength = 0.35
+    /// Hoe doorzichtig het glas is (0 = normaal, 1 = bijna weg).
+    var transparency = 0.0
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = PanelStyle()
+        background = try c.decodeIfPresent(PanelBackground.self, forKey: .background) ?? d.background
+        customColor = try c.decodeIfPresent(RGBAColor.self, forKey: .customColor) ?? d.customColor
+        glass = try c.decodeIfPresent(Bool.self, forKey: .glass) ?? d.glass
+        strength = try c.decodeIfPresent(Double.self, forKey: .strength) ?? d.strength
+        transparency = try c.decodeIfPresent(Double.self, forKey: .transparency) ?? d.transparency
+    }
+
+    /// De kleur waar deze stijl op gebaseerd is.
+    func baseColor(tint: FolderTint) -> NSColor {
+        switch background {
+        case .folderColor: tint.colors.0
+        case .clear: .white
+        case .smoked: .black
+        case .custom: customColor.nsColor
+        }
+    }
+
+    /// Tint over het glas, of nil voor puur glas.
+    func glassTint(tint: FolderTint) -> NSColor? {
+        switch background {
+        case .folderColor:
+            tint == .frost ? NSColor.white.withAlphaComponent(strength * 0.6)
+                           : tint.colors.0.withAlphaComponent(strength)
+        case .clear:
+            strength > 0.01 ? NSColor.white.withAlphaComponent(strength * 0.5) : nil
+        case .smoked:
+            NSColor.black.withAlphaComponent(0.2 + strength * 0.6)
+        case .custom:
+            customColor.nsColor.withAlphaComponent(strength)
+        }
+    }
+
+    /// Effen achtergrond als glas uit staat.
+    func solidColor(tint: FolderTint) -> NSColor {
+        switch background {
+        case .folderColor: tint.colors.0
+        case .clear: .windowBackgroundColor
+        case .smoked: NSColor(white: 0.12, alpha: 1)
+        case .custom: customColor.nsColor
+        }
+    }
+
+    /// Lichte of donkere tekst, afhankelijk van hoe donker de achtergrond wordt.
+    func appearance(tint: FolderTint) -> PanelAppearance {
+        switch background {
+        case .smoked: return .dark
+        case .clear: return .system
+        case .folderColor, .custom:
+            let lum = baseColor(tint: tint).luminance
+            if glass {
+                return strength >= 0.45 && lum < 0.55 ? .dark : .system
+            }
+            return lum < 0.6 ? .dark : .light
+        }
+    }
+}
+
+extension NSColor {
+    var luminance: Double {
+        guard let c = usingColorSpace(.sRGB) else { return 0.5 }
+        return 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+    }
 }
 
 enum FolderStorage {

@@ -50,10 +50,12 @@ final class FolderStore: ObservableObject {
         guard let i = folders.firstIndex(where: { $0.id == id }) else { return }
         var copy = folders[i]
         change(&copy)
-        guard copy != folders[i] else { return }
+        let old = folders[i]
+        guard copy != old else { return }
         folders[i] = copy
         persist()
-        rebuild(id)
+        // Uiterlijk van het paneel leest de map-app zelf bij elke klik; geen rebuild of Dock-herstart nodig.
+        if copy.affectsBundle(comparedTo: old) { rebuild(id) }
     }
 
     func addApps(_ urls: [URL], to id: UUID) {
