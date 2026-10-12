@@ -37,7 +37,7 @@ final class FolderStore: ObservableObject {
             name = "New Folder \(n)"
             n += 1
         }
-        let folder = AppFolder(name: name, tint: FolderTint.allCases[folders.count % FolderTint.allCases.count])
+        let folder = AppFolder(name: name, tint: FolderTint.presets[folders.count % FolderTint.presets.count])
         folders.append(folder)
         persist()
         rebuild(folder.id, delay: 0)

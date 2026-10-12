@@ -21,8 +21,13 @@ enum Paths {
 
 enum FolderTint: Int, CaseIterable, Codable, Identifiable {
     case blue, purple, pink, orange, green, graphite, frost
+    /// Eigen kleur; de waarde staat in `AppFolder.customTint`.
+    case custom
 
     var id: Int { rawValue }
+
+    /// De vaste kleuren (zonder de eigen kleur).
+    static var presets: [FolderTint] { allCases.filter { $0 != .custom } }
 
     var name: String {
         switch self {
@@ -33,6 +38,7 @@ enum FolderTint: Int, CaseIterable, Codable, Identifiable {
         case .green: "Green"
         case .graphite: "Graphite"
         case .frost: "Light"
+        case .custom: "Custom"
         }
     }
 
@@ -49,6 +55,8 @@ enum FolderTint: Int, CaseIterable, Codable, Identifiable {
         case .green: return (c(110, 220, 140), c(36, 160, 80))
         case .graphite: return (c(120, 124, 132), c(52, 54, 60))
         case .frost: return (c(250, 250, 252), c(214, 218, 226))
+        // Niet gebruikt: AppFolder.tintColors levert dan de eigen kleur.
+        case .custom: return FolderTint.blue.colors
         }
     }
 
@@ -64,9 +72,26 @@ struct AppFolder: Identifiable, Codable, Hashable {
     /// Absolute paden naar .app-bundles.
     var apps: [String] = []
     var tint: FolderTint = .blue
+    /// Gebruikt als `tint == .custom`.
+    var customTint = RGBAColor.defaultCustom
     var panel = PanelStyle()
     var grid = GridStyle()
     var icon = CustomIcon()
+
+    /// Verloop (boven, onder) van de mapkleur, inclusief de eigen kleur.
+    var tintColors: (NSColor, NSColor) {
+        tint == .custom ? customTint.gradient : tint.colors
+    }
+
+    /// Zo licht dat er wit glas i.p.v. gekleurd glas bij hoort.
+    var isLightTint: Bool {
+        tint == .frost || (tint == .custom && customTint.nsColor.luminance > 0.85)
+    }
+
+    var tintSwatch: LinearGradient {
+        LinearGradient(colors: [Color(nsColor: tintColors.0), Color(nsColor: tintColors.1)],
+                       startPoint: .top, endPoint: .bottom)
+    }
 
     init(id: UUID = UUID(), name: String, apps: [String] = [], tint: FolderTint = .blue,
          panel: PanelStyle = PanelStyle(), grid: GridStyle = GridStyle(), icon: CustomIcon = CustomIcon()) {
@@ -86,6 +111,7 @@ struct AppFolder: Identifiable, Codable, Hashable {
         name = try c.decode(String.self, forKey: .name)
         apps = try c.decodeIfPresent([String].self, forKey: .apps) ?? []
         tint = try c.decodeIfPresent(FolderTint.self, forKey: .tint) ?? .blue
+        customTint = try c.decodeIfPresent(RGBAColor.self, forKey: .customTint) ?? .defaultCustom
         panel = try c.decodeIfPresent(PanelStyle.self, forKey: .panel) ?? PanelStyle()
         grid = try c.decodeIfPresent(GridStyle.self, forKey: .grid) ?? GridStyle()
         icon = try c.decodeIfPresent(CustomIcon.self, forKey: .icon) ?? CustomIcon()
@@ -94,6 +120,7 @@ struct AppFolder: Identifiable, Codable, Hashable {
     /// Velden die het Dock-icoon of de bundle bepalen; alleen dan hoeft de bundle opnieuw gebouwd.
     func affectsBundle(comparedTo other: AppFolder) -> Bool {
         name != other.name || tint != other.tint || icon != other.icon
+            || (tint == .custom && customTint != other.customTint)
             || (!icon.enabled && apps.prefix(9) != other.apps.prefix(9))
     }
 }
@@ -246,6 +273,13 @@ struct RGBAColor: Codable, Hashable {
     var nsColor: NSColor { NSColor(srgbRed: red, green: green, blue: blue, alpha: 1) }
 
     static let defaultCustom = RGBAColor(red: 0.35, green: 0.30, blue: 0.85)
+
+    /// Verloop zoals bij de vaste kleuren: iets lichter boven, iets donkerder onder.
+    var gradient: (NSColor, NSColor) {
+        let base = nsColor
+        return (base.blended(withFraction: 0.25, of: .white) ?? base,
+                base.blended(withFraction: 0.15, of: .black) ?? base)
+    }
 }
 
 enum PanelAppearance { case light, dark, system }
@@ -272,9 +306,9 @@ struct PanelStyle: Codable, Hashable {
     }
 
     /// De kleur waar deze stijl op gebaseerd is.
-    func baseColor(tint: FolderTint) -> NSColor {
+    func baseColor(folder: AppFolder) -> NSColor {
         switch background {
-        case .folderColor: tint.colors.0
+        case .folderColor: folder.tintColors.0
         case .clear: .white
         case .smoked: .black
         case .custom: customColor.nsColor
@@ -282,11 +316,11 @@ struct PanelStyle: Codable, Hashable {
     }
 
     /// Tint over het glas, of nil voor puur glas.
-    func glassTint(tint: FolderTint) -> NSColor? {
+    func glassTint(folder: AppFolder) -> NSColor? {
         switch background {
         case .folderColor:
-            tint == .frost ? NSColor.white.withAlphaComponent(strength * 0.6)
-                           : tint.colors.0.withAlphaComponent(strength)
+            folder.isLightTint ? NSColor.white.withAlphaComponent(strength * 0.6)
+                               : folder.tintColors.0.withAlphaComponent(strength)
         case .clear:
             strength > 0.01 ? NSColor.white.withAlphaComponent(strength * 0.5) : nil
         case .smoked:
@@ -297,9 +331,9 @@ struct PanelStyle: Codable, Hashable {
     }
 
     /// Effen achtergrond als glas uit staat.
-    func solidColor(tint: FolderTint) -> NSColor {
+    func solidColor(folder: AppFolder) -> NSColor {
         switch background {
-        case .folderColor: tint.colors.0
+        case .folderColor: folder.tintColors.0
         case .clear: .windowBackgroundColor
         case .smoked: NSColor(white: 0.12, alpha: 1)
         case .custom: customColor.nsColor
@@ -307,12 +341,12 @@ struct PanelStyle: Codable, Hashable {
     }
 
     /// Lichte of donkere tekst, afhankelijk van hoe donker de achtergrond wordt.
-    func appearance(tint: FolderTint) -> PanelAppearance {
+    func appearance(folder: AppFolder) -> PanelAppearance {
         switch background {
         case .smoked: return .dark
         case .clear: return .system
         case .folderColor, .custom:
-            let lum = baseColor(tint: tint).luminance
+            let lum = baseColor(folder: folder).luminance
             if glass {
                 return strength >= 0.45 && lum < 0.55 ? .dark : .system
             }

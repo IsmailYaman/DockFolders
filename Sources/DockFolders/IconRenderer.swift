@@ -11,7 +11,7 @@ enum IconRenderer {
         let custom = folder.icon.enabled ? folder.icon : nil
         let icons = custom == nil ? folder.apps.prefix(9).map { IconCache.appIcon($0, points: cell) } : []
         let customImage = custom?.kind == .image ? custom?.imagePath.flatMap { NSImage(contentsOfFile: $0) } : nil
-        let (top, bottom) = folder.tint.colors
+        let (top, bottom) = folder.tintColors
 
         return NSImage(size: NSSize(width: size, height: size), flipped: true) { rect in
             let s = rect.width

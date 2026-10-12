@@ -19,8 +19,11 @@ final class ManagerAppDelegate: NSObject, NSApplicationDelegate {
             }
             // DOCKFOLDERS_CLICK="x,y" (punten vanaf linksboven): klik via window.sendEvent, net als een echte muisklik.
             if let click = ProcessInfo.processInfo.environment["DOCKFOLDERS_CLICK"] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
                     guard let window = NSApp.windows.first(where: \.isVisible) else { return }
+                    // Zoals bij een echte klik: de app is dan actief.
+                    NSApp.activate(ignoringOtherApps: true)
+                    window.makeKeyAndOrderFront(nil)
                     let xy = click.split(separator: ",").compactMap { Double($0) }
                     let point = NSPoint(x: xy[0], y: window.frame.height - xy[1])
                     for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
@@ -593,23 +596,28 @@ private struct IconSettings: View {
                     VStack(alignment: .leading, spacing: 12) {
                         SectionLabel("Color")
                         LazyVGrid(columns: swatchColumns, spacing: 10) {
-                            ForEach(FolderTint.allCases) { tint in
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(tint.swatch)
-                                    .frame(height: 44)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                            .strokeBorder(Color.primary.opacity(0.1))
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            .strokeBorder(Color.accentColor, lineWidth: 2.5)
-                                            .padding(-4)
-                                            .opacity(folder.tint == tint ? 1 : 0)
-                                    )
-                                    .help(tint.name)
-                                    .onTapGesture { store.update(folderID) { $0.tint = tint } }
+                            ForEach(FolderTint.presets) { tint in
+                                Button {
+                                    store.update(folderID) { $0.tint = tint }
+                                } label: {
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(tint.swatch)
+                                        .frame(height: 44)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .strokeBorder(Color.primary.opacity(0.1))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                                                .padding(-4)
+                                                .opacity(folder.tint == tint ? 1 : 0)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                                .help(tint.name)
                             }
+                            CustomTintSwatch(folder: folder)
                         }
                         .padding(4)
                     }
@@ -640,6 +648,7 @@ private struct IconSettings: View {
                 .padding(16)
             }
             .onAppear { name = folder.name }
+            .onDisappear { ColorPanelBridge.shared.detach() }
             // Hernoemd vanuit het paneel in de Dock: naamveld bijwerken (tenzij je er net in typt).
             .onChange(of: folder.name) { _, newName in
                 if !nameFocused { name = newName }
@@ -656,6 +665,78 @@ private struct IconSettings: View {
             return
         }
         store.update(folderID) { $0.name = trimmed }
+    }
+}
+
+/// Laatste blokje bij de kleuren: kiest een eigen kleur via het kleurenpaneel van macOS.
+private struct CustomTintSwatch: View {
+    @EnvironmentObject private var store: FolderStore
+    let folder: AppFolder
+
+    private var selected: Bool { folder.tint == .custom }
+
+    var body: some View {
+        Button(action: pick) { swatch }
+            .buttonStyle(.plain)
+            .help("Custom color")
+    }
+
+    private func pick() {
+        let id = folder.id
+        store.update(id) { $0.tint = .custom }
+        ColorPanelBridge.shared.open(color: folder.customTint.nsColor) { color in
+            store.update(id) { $0.tint = .custom; $0.customTint = RGBAColor(color) }
+        }
+    }
+
+    private var swatch: some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(selected ? AnyShapeStyle(folder.tintSwatch)
+                           : AnyShapeStyle(AngularGradient(colors: [.red, .orange, .yellow, .green, .cyan,
+                                                                    .blue, .purple, .pink, .red],
+                                                           center: .center)))
+            .frame(height: 44)
+            .overlay {
+                Image(systemName: selected ? "eyedropper" : "plus")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.35), radius: 2)
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.1))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                    .padding(-4)
+                    .opacity(selected ? 1 : 0)
+            )
+            .contentShape(Rectangle())
+    }
+}
+
+/// Koppelt het gedeelde kleurenpaneel van macOS aan één callback (de map die je nu bewerkt).
+final class ColorPanelBridge: NSObject {
+    static let shared = ColorPanelBridge()
+    private var onChange: ((NSColor) -> Void)?
+
+    func open(color: NSColor, onChange: @escaping (NSColor) -> Void) {
+        self.onChange = nil
+        let panel = NSColorPanel.shared
+        panel.showsAlpha = false
+        panel.color = color
+        panel.setTarget(self)
+        panel.setAction(#selector(changed(_:)))
+        self.onChange = onChange
+        panel.orderFront(nil)
+    }
+
+    /// Andere map gekozen: het paneel mag de vorige map niet meer aanpassen.
+    func detach() { onChange = nil }
+
+    @objc private func changed(_ sender: NSColorPanel) {
+        onChange?(sender.color)
     }
 }
 
@@ -988,7 +1069,7 @@ private struct BackgroundChoice: View {
 
     private var swatch: AnyShapeStyle {
         switch background {
-        case .folderColor: AnyShapeStyle(folder?.tint.swatch ?? FolderTint.blue.swatch)
+        case .folderColor: AnyShapeStyle(folder?.tintSwatch ?? FolderTint.blue.swatch)
         case .clear: AnyShapeStyle(Color.white.opacity(0.35))
         case .smoked: AnyShapeStyle(Color.black.opacity(0.75))
         case .custom: AnyShapeStyle(Color(nsColor: folder?.panel.customColor.nsColor ?? .systemPurple))

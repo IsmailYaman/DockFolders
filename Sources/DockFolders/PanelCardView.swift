@@ -42,16 +42,16 @@ final class PanelCardView: NSView {
 
         if style.glass {
             glass.style = style.background == .clear ? .clear : .regular
-            glass.tintColor = style.glassTint(tint: folder.tint)
+            glass.tintColor = style.glassTint(folder: folder)
             glass.alphaValue = 1 - style.transparency * 0.85
         } else {
             // Via effectiveAppearance, zodat systeemkleuren (licht/donker) goed worden opgelost.
             effectiveAppearance.performAsCurrentDrawingAppearance {
-                solid.layer?.backgroundColor = style.solidColor(tint: folder.tint).cgColor
+                solid.layer?.backgroundColor = style.solidColor(folder: folder).cgColor
             }
         }
 
-        switch style.appearance(tint: folder.tint) {
+        switch style.appearance(folder: folder) {
         case .dark: appearance = NSAppearance(named: .darkAqua)
         case .light: appearance = NSAppearance(named: .aqua)
         case .system: appearance = nil

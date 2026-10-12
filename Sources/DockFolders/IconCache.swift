@@ -22,7 +22,10 @@ enum IconCache {
     static func folderIcon(_ folder: AppFolder, points: CGFloat) -> NSImage {
         let icon = folder.icon
         let custom = icon.enabled ? "\(icon.kind)|\(icon.emoji)|\(icon.symbol)|\(icon.imagePath ?? "")" : "-"
-        let key = "folder|\(points)|\(folder.tint.rawValue)|\(custom)|\(folder.apps.prefix(9).joined(separator: ":"))"
+        let tint = folder.tint == .custom
+            ? "c\(folder.customTint.red),\(folder.customTint.green),\(folder.customTint.blue)"
+            : "\(folder.tint.rawValue)"
+        let key = "folder|\(points)|\(tint)|\(custom)|\(folder.apps.prefix(9).joined(separator: ":"))"
         return cached(key) {
             IconRenderer.image(for: folder, size: points).rasterized(points: points)
         }
