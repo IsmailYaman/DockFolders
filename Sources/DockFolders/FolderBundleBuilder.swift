@@ -32,7 +32,7 @@ enum FolderBundleBuilder {
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if base.isEmpty || base.hasPrefix(".") { base = "Map" }
+        if base.isEmpty || base.hasPrefix(".") { base = "Folder" }
         var candidate = base
         var n = 2
         while taken.contains(candidate.lowercased()) {
@@ -74,6 +74,7 @@ enum FolderBundleBuilder {
 
         // Info.plist
         let info: [String: Any] = [
+            "CFBundleDevelopmentRegion": "en",
             "CFBundleExecutable": executableName,
             "CFBundleIdentifier": bundleID(for: folder.id),
             "CFBundleName": folder.name,

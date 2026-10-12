@@ -30,10 +30,10 @@ final class FolderStore: ObservableObject {
 
     @discardableResult
     func addFolder() -> UUID {
-        var name = "Nieuwe map"
+        var name = "New Folder"
         var n = 2
         while folders.contains(where: { $0.name == name }) {
-            name = "Nieuwe map \(n)"
+            name = "New Folder \(n)"
             n += 1
         }
         let folder = AppFolder(name: name, tint: FolderTint.allCases[folders.count % FolderTint.allCases.count])
@@ -72,9 +72,16 @@ final class FolderStore: ObservableObject {
 
     // MARK: Dock
 
+    private var dockCache: (revision: Int, ids: [UUID: Bool]) = (-1, [:])
+
+    /// Gecachet per revisie: dit leest de Dock-voorkeuren en een map op schijf, en views vragen
+    /// het bij elke update op (bv. tijdens het slepen van een schuifje).
     func isInDock(_ id: UUID) -> Bool {
-        guard let url = FolderBundleBuilder.bundleURL(for: id) else { return false }
-        return DockManager.contains(url)
+        if dockCache.revision != revision { dockCache = (revision, [:]) }
+        if let cached = dockCache.ids[id] { return cached }
+        let inDock = FolderBundleBuilder.bundleURL(for: id).map(DockManager.contains) ?? false
+        dockCache.ids[id] = inDock
+        return inDock
     }
 
     func addToDock(_ id: UUID) {

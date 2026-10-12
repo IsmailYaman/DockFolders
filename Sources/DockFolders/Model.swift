@@ -26,13 +26,13 @@ enum FolderTint: Int, CaseIterable, Codable, Identifiable {
 
     var name: String {
         switch self {
-        case .blue: "Blauw"
-        case .purple: "Paars"
-        case .pink: "Roze"
-        case .orange: "Oranje"
-        case .green: "Groen"
-        case .graphite: "Grafiet"
-        case .frost: "Licht"
+        case .blue: "Blue"
+        case .purple: "Purple"
+        case .pink: "Pink"
+        case .orange: "Orange"
+        case .green: "Green"
+        case .graphite: "Graphite"
+        case .frost: "Light"
         }
     }
 
@@ -99,10 +99,10 @@ enum PanelBackground: String, Codable, CaseIterable, Identifiable {
 
     var name: String {
         switch self {
-        case .folderColor: "Mapkleur"
-        case .clear: "Transparant glas"
-        case .smoked: "Smoked glas"
-        case .custom: "Eigen kleur"
+        case .folderColor: "Folder Color"
+        case .clear: "Clear Glass"
+        case .smoked: "Smoked Glass"
+        case .custom: "Custom Color"
         }
     }
 }

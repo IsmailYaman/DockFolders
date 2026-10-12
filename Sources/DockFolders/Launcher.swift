@@ -45,8 +45,8 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         // Elke keer opnieuw inlezen, zodat wijzigingen uit de beheer-app direct zichtbaar zijn.
         guard let folder = FolderStorage.load().first(where: { $0.id == folderID }) else {
             let alert = NSAlert()
-            alert.messageText = "Deze map bestaat niet meer"
-            alert.informativeText = "Open DockFolders om je mappen te beheren."
+            alert.messageText = "This folder no longer exists"
+            alert.informativeText = "Open DockFolders to manage your folders."
             NSApp.activate()
             alert.runModal()
             NSApp.terminate(nil)
@@ -303,9 +303,9 @@ struct FolderPanelView: View {
 
             if apps.isEmpty {
                 VStack(spacing: 10) {
-                    Text("Nog geen apps in deze map")
+                    Text("No apps in this folder yet")
                         .foregroundStyle(.secondary)
-                    Button("Apps toevoegen…", action: edit)
+                    Button("Add Apps…", action: edit)
                 }
                 .frame(width: 280, height: 110)
             } else {
@@ -325,7 +325,7 @@ struct FolderPanelView: View {
         .padding(.bottom, 18)
         .contentShape(Rectangle())
         .contextMenu {
-            Button("Map bewerken…", action: edit)
+            Button("Edit Folder…", action: edit)
         }
     }
 }

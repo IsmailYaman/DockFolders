@@ -47,7 +47,7 @@ if let idString = Bundle.main.object(forInfoDictionaryKey: Paths.folderIDKey) as
     do {
         try IconRenderer.writeICNS(for: sample, to: URL(fileURLWithPath: args[i + 1]))
     } catch {
-        FileHandle.standardError.write("Icoon export mislukt: \(error)\n".data(using: .utf8)!)
+        FileHandle.standardError.write("Icon export failed: \(error)\n".data(using: .utf8)!)
         exit(1)
     }
 } else {

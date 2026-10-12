@@ -7,12 +7,15 @@ import SwiftUI
 final class PanelCardView: NSView {
     static let cornerRadius: CGFloat = 34
 
+    /// De natuurlijke grootte (inhoud), los van de frame die een layout-systeem eraan geeft.
+    var preferredSize: NSSize
     private let glass = NSGlassEffectView()
     private let solid = NSView()
     let content: NSView
 
     init(content: NSView, size: NSSize) {
         self.content = content
+        self.preferredSize = size
         super.init(frame: NSRect(origin: .zero, size: size))
         wantsLayer = true
 
@@ -60,6 +63,12 @@ final class PanelCardView: NSView {
 struct PanelPreview: NSViewRepresentable {
     let folder: AppFolder
 
+    /// Natuurlijke grootte van het paneel; gebruik met `.frame`, want een AppKit-view in SwiftUI
+    /// wordt anders opgerekt tot alle beschikbare ruimte.
+    static func size(for folder: AppFolder) -> CGSize {
+        NSHostingView(rootView: FolderPanelView(folder: folder, open: { _ in }, edit: {})).fittingSize
+    }
+
     func makeNSView(context: Context) -> PanelCardView {
         let hosting = NSHostingView(rootView: FolderPanelView(folder: folder, open: { _ in }, edit: {}))
         let card = PanelCardView(content: hosting, size: hosting.fittingSize)
@@ -80,13 +89,15 @@ struct PanelPreview: NSViewRepresentable {
         if previous?.name != folder.name || previous?.apps != folder.apps,
            let hosting = card.content as? NSHostingView<FolderPanelView> {
             hosting.rootView = FolderPanelView(folder: folder, open: { _ in }, edit: {})
-            card.setFrameSize(hosting.fittingSize)
+            card.preferredSize = hosting.fittingSize
         }
         context.coordinator.shown = folder
         card.apply(folder)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: PanelCardView, context: Context) -> CGSize? {
-        nsView.frame.size
+        // Niet frame.size: die heeft SwiftUI al op de beschikbare ruimte gezet, waardoor het
+        // voorbeeld steeds groter werd en de hele middenkolom vulde.
+        nsView.preferredSize
     }
 }
