@@ -7,7 +7,9 @@ enum IconRenderer {
     static func image(for folder: AppFolder, size: CGFloat = 1024) -> NSImage {
         // Uit de cache, op ongeveer het formaat van een rastervak: veel sneller dan steeds de
         // 1024px-versie van elk app-icoon verkleinen.
-        let cell = max(16, (size * 0.8 / 3).rounded(.up))
+        // Responsive raster: 1-4 apps in 2×2 (grotere iconen), 5-9 in 3×3.
+        let dimension = gridDimension(forAppCount: folder.apps.count)
+        let cell = max(16, (size * 0.8 / CGFloat(dimension)).rounded(.up))
         let custom = folder.icon.enabled ? folder.icon : nil
         let icons = custom == nil ? folder.apps.prefix(9).map { IconCache.appIcon($0, points: cell) } : []
         let customImage = custom?.kind == .image ? custom?.imagePath.flatMap { NSImage(contentsOfFile: $0) } : nil
@@ -65,11 +67,13 @@ enum IconRenderer {
                 return true
             }
 
-            let pad = body.width * 0.07
-            let gap = body.width * 0.01
-            let cell = (body.width - 2 * pad - 2 * gap) / 3
+            let n = CGFloat(dimension)
+            // Bij 2×2 iets meer lucht, zodat de grotere iconen niet tegen elkaar aan staan.
+            let pad = body.width * (dimension == 2 ? 0.09 : 0.07)
+            let gap = body.width * (dimension == 2 ? 0.04 : 0.01)
+            let cell = (body.width - 2 * pad - (n - 1) * gap) / n
             for (i, icon) in icons.enumerated() {
-                let row = CGFloat(i / 3), col = CGFloat(i % 3)
+                let row = CGFloat(i / dimension), col = CGFloat(i % dimension)
                 let frame = NSRect(x: body.minX + pad + col * (cell + gap),
                                    y: body.minY + pad + row * (cell + gap),
                                    width: cell, height: cell)
@@ -78,6 +82,11 @@ enum IconRenderer {
             }
             return true
         }
+    }
+
+    /// Aantal rijen/kolommen van het raster in het map-icoon.
+    static func gridDimension(forAppCount count: Int) -> Int {
+        count <= 4 ? 2 : 3
     }
 
     /// Eigen icoon: emoji of SF Symbol midden op de tegel, of een afbeelding die de tegel vult.

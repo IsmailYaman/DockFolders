@@ -11,7 +11,7 @@ final class PanelCardView: NSView {
     var preferredSize: NSSize
     private let glass = NSGlassEffectView()
     private let solid = NSView()
-    let content: NSView
+    private(set) var content: NSView
 
     init(content: NSView, size: NSSize) {
         self.content = content
@@ -30,6 +30,17 @@ final class PanelCardView: NSView {
             view.autoresizingMask = [.width, .height]
             addSubview(view)
         }
+    }
+
+    /// Inhoud vervangen (bv. een nieuw opgebouwd paneel) en de kaart op de nieuwe maat zetten.
+    func replaceContent(_ view: NSView, size: NSSize) {
+        content.removeFromSuperview()
+        content = view
+        preferredSize = size
+        setFrameSize(size)
+        view.frame = bounds
+        view.autoresizingMask = [.width, .height]
+        addSubview(view)
     }
 
     @available(*, unavailable)
@@ -88,10 +99,11 @@ struct PanelPreview: NSViewRepresentable {
         // Inhoud en grootte alleen opnieuw als die echt verandert; bij de glas-schuifjes
         // verandert alleen de achtergrond.
         let previous = context.coordinator.shown
-        if previous?.name != folder.name || previous?.apps != folder.apps || previous?.grid != folder.grid,
-           let hosting = card.content as? NSHostingView<FolderPanelView> {
-            hosting.rootView = FolderPanelView(folder: folder, actions: actions)
-            card.preferredSize = hosting.fittingSize
+        if previous?.name != folder.name || previous?.apps != folder.apps || previous?.grid != folder.grid {
+            // Helemaal opnieuw opbouwen i.p.v. rootView te vervangen: SwiftUI zou anders de oude
+            // @State (lijst apps) houden, waardoor kaart en inhoud een andere maat kregen.
+            let hosting = NSHostingView(rootView: FolderPanelView(folder: folder, actions: actions))
+            card.replaceContent(hosting, size: hosting.fittingSize)
         }
         context.coordinator.shown = folder
         card.apply(folder)
