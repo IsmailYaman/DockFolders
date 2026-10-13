@@ -161,7 +161,9 @@ final class FolderStore: ObservableObject {
             guard let self, let folder = self.folder(id) else { return }
             do {
                 let url = try FolderBundleBuilder.build(folder)
-                if DockManager.contains(url) { DockManager.restart(after: 0.8) }
+                // De map-app zet zijn Dock-icoon zelf zodra folders.json wijzigt; draait hij niet,
+                // dan starten we hem op de achtergrond. Zo is een Dock-herstart niet nodig.
+                if DockManager.contains(url) { FolderBundleBuilder.launchInBackground(url) }
             } catch {
                 NSLog("DockFolders: bouwen mislukt: \(error)")
             }

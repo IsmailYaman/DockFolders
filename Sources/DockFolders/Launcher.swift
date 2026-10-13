@@ -16,6 +16,8 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         prewarmIcons()
+        updateDockIcon()
+        watchConfig()
         // Bij inloggen start DockFolders ons op de achtergrond, zodat de eerste klik meteen werkt.
         if CommandLine.arguments.contains(FolderBundleBuilder.backgroundArgument) { return }
         // Op dit moment staat de muis nog op het Dock-icoon waarop geklikt is.
@@ -130,14 +132,52 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
     /// Verplaatsen, signeren en herstarten duurt even: niet op de main thread.
     private func rebuildBundle() {
         guard let folder = FolderStorage.load().first(where: { $0.id == folderID }) else { return }
+        updateDockIcon()
+        // De bundle (icoon voor als we niet draaien, naam) op de achtergrond bijwerken. Geen
+        // Dock-herstart nodig: het Dock-icoon zetten we hierboven zelf. (Bij hernoemen herstart
+        // build() de Dock wel, want het label komt van de bestandsnaam.)
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let url = try FolderBundleBuilder.build(folder)
-                if DockManager.contains(url) { DockManager.restart(after: 0.3) }
+                try FolderBundleBuilder.build(folder)
             } catch {
                 NSLog("DockFolders: bijwerken mislukt: \(error)")
             }
         }
+    }
+
+    // MARK: Live Dock-icoon
+
+    private var configWatcher: DispatchSourceFileSystemObject?
+    private var shownIconSignature: String?
+
+    /// Een draaiende app kan zijn Dock-icoon direct vervangen. Zo is een wijziging (apps, kleur,
+    /// eigen icoon) meteen zichtbaar, zonder de Dock te herstarten of op zijn icooncache te wachten.
+    private func updateDockIcon() {
+        guard let folder = FolderStorage.load().first(where: { $0.id == folderID }) else { return }
+        let signature = IconCache.signature(of: folder)
+        guard signature != shownIconSignature else { return }
+        shownIconSignature = signature
+        // Renderen kost even (negen app-iconen): op de achtergrond, daarna op de main thread zetten.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let image = IconCache.folderIcon(folder, points: 512)
+            DispatchQueue.main.async {
+                // Intussen alweer gewijzigd? Dan is er een nieuwere render onderweg.
+                guard self.shownIconSignature == signature else { return }
+                NSApp.applicationIconImage = image
+            }
+        }
+    }
+
+    /// De beheer-app (of een ander proces) past folders.json aan: Dock-icoon direct bijwerken.
+    /// (De map in de gaten houden, niet het bestand: opslaan is atomisch en vervangt het bestand.)
+    private func watchConfig() {
+        let fd = open(Paths.support.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
+        source.setEventHandler { [weak self] in self?.updateDockIcon() }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        configWatcher = source
     }
 
     /// Nieuwe naam opslaan en de bundle (en daarmee de naam in de Dock) bijwerken.

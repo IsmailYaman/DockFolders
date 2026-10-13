@@ -20,15 +20,20 @@ enum IconCache {
 
     /// Map-icoon (raster van app-iconen in de mapkleur).
     static func folderIcon(_ folder: AppFolder, points: CGFloat) -> NSImage {
+        cached("folder|\(points)|\(signature(of: folder))") {
+            IconRenderer.image(for: folder, size: points).rasterized(points: points)
+        }
+    }
+
+    /// Alles waar het map-icoon van afhangt; gelijk = hetzelfde icoon.
+    static func signature(of folder: AppFolder) -> String {
         let icon = folder.icon
         let custom = icon.enabled ? "\(icon.kind)|\(icon.emoji)|\(icon.symbol)|\(icon.imagePath ?? "")" : "-"
         let tint = folder.tint == .custom
             ? "c\(folder.customTint.red),\(folder.customTint.green),\(folder.customTint.blue)"
             : "\(folder.tint.rawValue)"
-        let key = "folder|\(points)|\(tint)|\(custom)|\(folder.apps.prefix(9).joined(separator: ":"))"
-        return cached(key) {
-            IconRenderer.image(for: folder, size: points).rasterized(points: points)
-        }
+        let apps = icon.enabled ? "" : folder.apps.prefix(9).joined(separator: ":")
+        return "\(tint)|\(custom)|\(apps)"
     }
 
     /// Vul de cache vooraf op de achtergrond, zodat de eerste klik meteen snel is.
