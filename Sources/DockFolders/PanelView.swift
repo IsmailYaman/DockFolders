@@ -6,7 +6,8 @@ import SwiftUI
 /// beheer-app vullen dit elk op hun eigen manier in; nil = actie niet beschikbaar.
 struct PanelActions {
     var open: (URL) -> Void = { _ in }
-    var edit: () -> Void = {}
+    /// nil = geen "bewerken" (bv. in het voorbeeld, waar je al in de beheer-app zit).
+    var edit: (() -> Void)?
     var rename: ((String) -> Void)?
     /// Nieuwe volgorde van de app-paden (alleen bestaande apps).
     var reorder: (([String]) -> Void)?
@@ -61,6 +62,8 @@ struct FolderPanelView: View {
     @State private var order: [String]
     @State private var page = 0
     @State private var dropTarget: String?
+    /// De app die nu gesleept wordt (om hem te dimmen en de invoegplek te bepalen).
+    @State private var dragging: String?
     /// Cursorpositie en icoonmiddelpunten voor de Dock-achtige vergroting.
     @State private var cursor: CGPoint?
     @State private var iconCenters: [String: CGPoint] = [:]
@@ -107,7 +110,9 @@ struct FolderPanelView: View {
                 VStack(spacing: 10) {
                     Text("No apps in this folder yet")
                         .foregroundStyle(.secondary)
-                    Button("Add Apps…", action: actions.edit)
+                    if let edit = actions.edit {
+                        Button("Add Apps…", action: edit)
+                    }
                 }
                 .frame(width: 280, height: 110)
             } else {
@@ -146,7 +151,9 @@ struct FolderPanelView: View {
         .padding(.bottom, 18)
         .contentShape(Rectangle())
         .contextMenu {
-            Button("Edit Folder…", action: actions.edit)
+            if let edit = actions.edit {
+                Button("Edit Folder…", action: edit)
+            }
         }
         .focusable()
         .focusEffectDisabled()
@@ -191,28 +198,57 @@ struct FolderPanelView: View {
     private func tile(_ app: LaunchableApp) -> some View {
         let scale = magnification(for: app)
         let tile = AppTile(app: app, size: grid.iconSize, showRunning: grid.showRunning,
-                           dropTargeted: dropTarget == app.id, magnification: scale) { actions.open(app.url) }
+                           magnification: scale) { actions.open(app.url) }
             .contextMenu { appMenu(app) }
             // Grotere iconen boven hun buren.
             .zIndex(Double(scale ?? 1))
 
         if actions.reorder != nil {
             tile
-                .draggable(app.id) {
+                .opacity(dragging == app.id ? 0.35 : 1)
+                .overlay(alignment: insertionEdge(for: app) == .leading ? .leading : .trailing) {
+                    if let edge = insertionEdge(for: app) {
+                        // Invoegstreep midden in de tussenruimte, zoals de lijn in het Apps-tabblad.
+                        let offset = grid.density.spacing.horizontal / 2 + 2
+                        Capsule()
+                            .fill(Color.accentColor)
+                            .frame(width: 4, height: grid.iconSize.points)
+                            .offset(x: edge == .leading ? -offset : offset, y: -8)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.12), value: dropTarget)
+                .onDrag {
+                    dragging = app.id
+                    return NSItemProvider(object: app.id as NSString)
+                } preview: {
                     Image(nsImage: app.icon)
                         .resizable()
                         .frame(width: grid.iconSize.points, height: grid.iconSize.points)
                 }
                 .dropDestination(for: String.self) { items, _ in
+                    defer { dragging = nil; dropTarget = nil }
                     guard let moved = items.first else { return false }
                     move(moved, before: app.id)
                     return true
                 } isTargeted: { targeted in
                     if targeted { dropTarget = app.id } else if dropTarget == app.id { dropTarget = nil }
                 }
+                // Slepen geannuleerd? Zodra de muis weer gewoon over de iconen beweegt, opruimen.
+                .onHover { inside in
+                    if inside && dropTarget == nil { dragging = nil }
+                }
         } else {
             tile
         }
+    }
+
+    /// Aan welke kant van `app` de gesleepte app terechtkomt (nil = hier niet).
+    /// Klopt met `reordered`: naar achteren slepen landt ná het doel, naar voren ervóór.
+    private func insertionEdge(for app: LaunchableApp) -> HorizontalEdge? {
+        guard dropTarget == app.id, let dragging, dragging != app.id,
+              let from = order.firstIndex(of: dragging), let to = order.firstIndex(of: app.id) else { return nil }
+        return from < to ? .trailing : .leading
     }
 
     @ViewBuilder
@@ -300,6 +336,8 @@ private struct EditableTitle: View {
                     .onAppear { focused = true }
             } else {
                 Text(current)
+                    // Tekstcursor als je kunt hernoemen, zodat je ziet dat de titel bewerkbaar is.
+                    .pointerStyle(onRename != nil ? .horizontalText : nil)
                     .onTapGesture(count: 2) {
                         guard onRename != nil else { return }
                         draft = current
@@ -325,7 +363,6 @@ struct AppTile: View {
     let app: LaunchableApp
     let size: IconSize
     let showRunning: Bool
-    let dropTargeted: Bool
     /// Schaal door de Dock-achtige vergroting; nil = gewoon hover-effect.
     var magnification: CGFloat?
     let action: () -> Void
@@ -361,10 +398,6 @@ struct AppTile: View {
         }
         .frame(width: width)
         .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.primary.opacity(dropTargeted ? 0.12 : 0))
-        )
         .contentShape(Rectangle())
         .onHover { h in withAnimation(.easeOut(duration: 0.12)) { hovering = h } }
         .onTapGesture(perform: action)

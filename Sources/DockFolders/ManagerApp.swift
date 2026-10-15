@@ -422,9 +422,12 @@ struct PreviewStage: View {
 }
 
 extension PreviewStage {
-    /// In het voorbeeld werken slepen en verwijderen ook; openen en hernoemen niet.
+    /// In het voorbeeld werken hernoemen (dubbelklik op de titel), slepen en verwijderen ook.
     var previewActions: PanelActions {
         var actions = PanelActions()
+        actions.rename = { name in
+            store.update(folderID) { $0.name = name }
+        }
         actions.reorder = { order in
             store.update(folderID) { $0.apps = order + $0.apps.filter { !order.contains($0) } }
         }
@@ -1203,6 +1206,8 @@ struct AppRow: View {
         }
         .padding(.vertical, 3)
         .contentShape(Rectangle())
+        // Laat zien dat je de rij kunt verslepen om de volgorde te wijzigen.
+        .pointerStyle(.grabIdle)
         .onHover { hovering = $0 }
         .contextMenu {
             Button("Remove from Folder", action: remove)

@@ -156,7 +156,7 @@ struct GridStyle: Codable, Hashable {
     var iconSize = IconSize.medium
     var density = GridDensity.normal
     /// Maximaal aantal rijen per pagina; meer apps gaan naar een volgende pagina.
-    var rowsPerPage = 4
+    var rowsPerPage = 3
     var hidePagination = false
     /// Puntje onder apps die draaien.
     var showRunning = true
